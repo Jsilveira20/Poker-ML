@@ -7,6 +7,10 @@ const server = http.createServer(app);
 
 app.use(express.static(__dirname));
 
+app.get("/", (req, res) => {
+  res.sendFile(__dirname + "/index.html");
+});
+
 const io = new Server(server, {
   cors: { origin: "*" }
 });

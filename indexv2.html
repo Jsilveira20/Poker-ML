@@ -606,6 +606,12 @@ const PHASE_LABELS = { preflop: 'Pre-Flop', flop: 'Flop', turn: 'Turn', river: '
 let deck = [], communityCards = [], pot = 0, currentBet = 0, roundsPlayed = 0;
 let mlLevel = 0;
 let globalBank = 20000; // ── BANCO GLOBAL: persiste entre partidas ──
+const BUY_IN = 1000;   // ── Stack inicial en mesa (NO se descuenta del banco al entrar) ──
+// LÓGICA CORRECTA DE DINERO:
+//   Al sentarse:  bank queda intacto, stack = BUY_IN
+//   Al salir:     ganancia = stack_final - BUY_IN
+//                 bank += ganancia   (0 si no jugó, positivo si ganó, negativo si perdió)
+// Garantía anti-exploit: entrar/salir sin jugar → ganancia=0 → bank sin cambios
 // ── ML Knowledge ──────────────────────────────────────────────
 let mlKnowledge = {
   winRates: {},
@@ -2437,23 +2443,32 @@ function cardHTML(c) {
 function initPlayers(humanName) {
   players = [];
   const botNames = ['Bot Alex','Bot Sam','Bot Lee','Bot Max','Bot Nova'];
+
+  // ── LÓGICA CORRECTA DE DINERO ────────────────────────────────
+  // El banco NO se toca al sentarse.
+  // El stack arranca con BUY_IN (dinero "nuevo" para la mesa).
+  // Al salir: banco += (stack_final - BUY_IN)
+  //   → sin jugar:  stack=1000, buyIn=1000 → ganancia=0   → banco sin cambios ✓
+  //   → ganó 900:   stack=1900, buyIn=1000 → ganancia=+900 → banco +900        ✓
+  //   → perdió 600: stack=400,  buyIn=1000 → ganancia=-600 → banco -600        ✓
   players.push({
     name: humanName || 'Tú',
     isHuman: true, isML: false,
-    chips: 1000, bank: globalBank,
+    chips: BUY_IN, bank: globalBank,  // bank intacto, stack = BUY_IN
+    buyIn: BUY_IN,                    // referencia para calcular ganancia neta al salir
     bet: 0, folded: false, hand: [],
     mlLevel: -1, x: 0, z: 0
   });
   for(let i=0; i<5; i++) {
     players.push({
       name: botNames[i], isHuman: false, isML: false,
-      chips: 1000, bank: 20000,
+      chips: BUY_IN, bank: 20000, buyIn: BUY_IN,
       bet: 0, folded: false, hand: [],
       mlLevel: Math.floor(Math.random()*3), x: 0, z: 0
     });
   }
   humanIndex = 0;
-  humanIndices = [0]; // track all human indices
+  humanIndices = [0];
 }
 
 function initPlayersMulti(humanNames) {
@@ -2465,12 +2480,16 @@ function initPlayersMulti(humanNames) {
   const numHumans = Math.min(humanNames.length, 4);
   const numBots   = Math.max(0, maxPlayers - numHumans);
 
+  const buyIn = BUY_IN;
+
   humanNames.slice(0, numHumans).forEach((name, i) => {
     humanIndices.push(i);
     players.push({
       name: name || `Jugador ${i+1}`,
       isHuman: true, isML: false,
-      chips: 1000, bank: i === 0 ? globalBank : 20000,
+      chips: buyIn,
+      bank: i === 0 ? globalBank : 20000,  // bank intacto
+      buyIn: buyIn,
       bet: 0, folded: false, hand: [],
       mlLevel: -1, x: 0, z: 0
     });
@@ -2577,8 +2596,20 @@ function startHand() {
     setMsg('¡Juego terminado! Todos sin fondos.'); return;
   }
   players.forEach(p => {
-    if(p.chips < 100 && p.bank >= 1000) { p.bank -= 1000; p.chips += 1000; }
-    else if(p.chips < 100 && p.bank > 0) { p.chips += p.bank; p.bank = 0; }
+    // Re-buy: si se queda sin fichas, recibe más stack (del banco conceptual)
+    // El banco NO se descuenta acá — se ajusta al salir por ganancia neta.
+    // Solo actualizamos buyIn acumulado para que el cálculo de salida sea correcto.
+    if(p.chips < 100 && p.bank >= BUY_IN) {
+      p.chips += BUY_IN;
+      if(p.isHuman) p.buyIn = (p.buyIn || BUY_IN) + BUY_IN;
+    } else if(p.chips < 100 && p.bank > 0 && p.isHuman) {
+      // Sin fondos suficientes para re-buy completo — usa lo que queda
+      const rebuy = Math.min(BUY_IN, p.bank);
+      p.chips += rebuy;
+      p.buyIn = (p.buyIn || BUY_IN) + rebuy;
+    } else if(p.chips < 100 && !p.isHuman) {
+      p.chips += BUY_IN; // bots siempre re-buy
+    }
   });
 
   // Replace any broke bots between hands
@@ -3542,8 +3573,8 @@ function updateBankUI() {
   }
   const p = players[pIdx];
   if(!p) return;
-  // Sync globalBank with the human player's bank (keep them in sync)
-  if(p.isHuman) globalBank = p.bank;
+  // NOTE: p.bank reflects bank-after-buy-in (already deducted).
+  // globalBank stays in sync via initPlayers/startHand — don't overwrite here.
   document.getElementById('bankAmount').textContent = p.bank;
   document.getElementById('chipsAmount').textContent = p.chips;
 }
@@ -3741,16 +3772,28 @@ function createStartButton() {
 }
 
 // ============================================================
-// SALIR DE LA SALA — guarda ganancias en el banco global
+// SALIR DE LA SALA — ajusta bank solo por la GANANCIA NETA
+// ============================================================
+// El banco NO se tocó al entrar (bank = globalBank intacto).
+// Al salir, la ganancia neta se suma/resta al banco global.
+//
+//   sin jugar:   stack=1000, buyIn=1000 → neto=  0  → bank sin cambios ✓
+//   ganó 900:    stack=1900, buyIn=1000 → neto=+900  → bank += 900      ✓
+//   perdió 600:  stack= 400, buyIn=1000 → neto=-600  → bank -= 600      ✓
 // ============================================================
 function exitRoom() {
-  // Calcular chips netas del jugador humano principal
   const humanPlayer = players[humanIndex] || players.find(p => p.isHuman);
+
+  let netProfit = 0;
   if(humanPlayer) {
-    // Guardar fichas actuales en el banco global
-    const chipsToBank = humanPlayer.chips;
-    globalBank += chipsToBank;
-    console.log(`[EXIT] Fichas guardadas: +${chipsToBank} | Nuevo banco: ${globalBank}`);
+    const stackFinal = humanPlayer.chips || 0;
+    const buyInTotal = humanPlayer.buyIn || BUY_IN;
+    netProfit = stackFinal - buyInTotal;
+
+    // Ajustar globalBank SOLO por la ganancia neta
+    globalBank += netProfit;
+
+    console.log(`[EXIT] Stack final: $${stackFinal} | Buy-in total: $${buyInTotal} | Ganancia neta: ${netProfit >= 0 ? '+' : ''}$${netProfit} | Nuevo banco: $${globalBank}`);
   }
 
   // Detener el juego
@@ -3766,7 +3809,6 @@ function exitRoom() {
   document.getElementById('playerHand').innerHTML = '';
   document.getElementById('communityCards').innerHTML = '';
   document.getElementById('mlPerfPanel').style.display = 'none';
-  // Limpiar labels de jugadores
   playerLabels.forEach(el => el.remove());
   playerLabels = [];
 
@@ -3774,23 +3816,22 @@ function exitRoom() {
   deck = []; communityCards = []; pot = 0; currentBet = 0;
   players = []; phase = 'waiting'; actionIndex = 0;
 
-  // Actualizar bank en el lobby input para que se vea al volver
-  // Mostrar pantalla del lobby con el banco actualizado
-  const lobbyOverlay = document.getElementById('lobbyOverlay');
-  lobbyOverlay.style.display = 'flex';
-
-  // Mostrar resumen de salida
-  showExitSummary(humanPlayer);
+  document.getElementById('lobbyOverlay').style.display = 'flex';
+  showExitSummary(humanPlayer, netProfit);
 }
 
-function showExitSummary(humanPlayer) {
+function showExitSummary(humanPlayer, netProfit) {
   const old = document.getElementById('exitSummaryModal');
   if(old) old.remove();
 
-  const chipsGanados = humanPlayer ? humanPlayer.chips : 0;
-  const nuevoBank = globalBank;
-  const ganancia = chipsGanados; // lo que llevaba en fichas
-  const positivo = ganancia >= 0;
+  const stackFinal  = humanPlayer ? (humanPlayer.chips || 0) : 0;
+  const buyInTotal  = humanPlayer ? (humanPlayer.buyIn || BUY_IN) : BUY_IN;
+  const profit      = netProfit !== undefined ? netProfit : (stackFinal - buyInTotal);
+  const nuevoBank   = globalBank;
+  const profitLabel = profit > 0 ? `+$${profit}` : profit < 0 ? `-$${Math.abs(profit)}` : '$0';
+  const profitColor = profit > 0 ? '#44ff88' : profit < 0 ? '#ff6666' : '#aaaaaa';
+  const borderColor = profit > 0 ? '#d4a017' : profit < 0 ? '#882222' : '#555555';
+  const glowColor   = profit > 0 ? 'rgba(212,160,23,0.25)' : profit < 0 ? 'rgba(180,30,30,0.25)' : 'rgba(80,80,80,0.2)';
 
   const modal = document.createElement('div');
   modal.id = 'exitSummaryModal';
@@ -3801,40 +3842,57 @@ function showExitSummary(humanPlayer) {
   modal.innerHTML = `
     <div style="
       background:linear-gradient(160deg,#1c1400,#0e0b00);
-      border:2px solid ${positivo?'#d4a017':'#882222'};
+      border:2px solid ${borderColor};
       border-radius:20px;padding:36px 44px;text-align:center;
-      max-width:420px;width:90%;
-      box-shadow:0 0 60px ${positivo?'rgba(212,160,23,0.25)':'rgba(180,30,30,0.25)'};
+      max-width:460px;width:90%;
+      box-shadow:0 0 60px ${glowColor};
       font-family:'Rajdhani',sans-serif;">
-      <div style="font-family:'Playfair Display',serif;color:${positivo?'#ffd060':'#ff8888'};
-        font-size:26px;margin-bottom:8px;">
-        ${positivo ? '🏦 ¡Retiro exitoso!' : '🚪 Saliendo de la sala'}
+
+      <div style="font-family:'Playfair Display',serif;
+        color:${profit > 0 ? '#ffd060' : profit < 0 ? '#ff8888' : '#aaaaaa'};
+        font-size:26px;margin-bottom:6px;">
+        ${profit > 0 ? '🏆 ¡Sesión ganadora!' : profit < 0 ? '📉 Sesión con pérdidas' : '➖ Sin cambios'}
       </div>
-      <div style="color:#888;font-size:13px;margin-bottom:20px;">Resumen de la sesión</div>
-      <div style="display:flex;gap:16px;justify-content:center;margin-bottom:20px;flex-wrap:wrap;">
-        <div style="background:rgba(255,255,255,0.04);border:1px solid #333;
-          border-radius:12px;padding:14px 20px;min-width:110px;">
-          <div style="color:#888;font-size:10px;margin-bottom:4px;letter-spacing:1px;">FICHAS GUARDADAS</div>
-          <div style="color:${positivo?'#44ff88':'#ff8888'};font-size:22px;font-weight:700;">
-            ${positivo?'+':''}$${chipsGanados}
-          </div>
+      <div style="color:#555;font-size:11px;margin-bottom:22px;letter-spacing:2px;text-transform:uppercase;">Resumen de sesión</div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:20px;">
+        <div style="background:rgba(255,255,255,0.03);border:1px solid #2a2a2a;border-radius:10px;padding:12px 8px;">
+          <div style="color:#555;font-size:9px;margin-bottom:5px;letter-spacing:1px;">BUY-IN</div>
+          <div style="color:#888;font-size:18px;font-weight:700;">$${buyInTotal}</div>
         </div>
-        <div style="background:rgba(212,160,23,0.06);border:1px solid #d4a017;
-          border-radius:12px;padding:14px 20px;min-width:110px;">
-          <div style="color:#888;font-size:10px;margin-bottom:4px;letter-spacing:1px;">NUEVO BANCO</div>
-          <div style="color:#ffd060;font-size:22px;font-weight:700;">$${nuevoBank}</div>
+        <div style="background:rgba(255,255,255,0.03);border:1px solid #2a2a2a;border-radius:10px;padding:12px 8px;">
+          <div style="color:#555;font-size:9px;margin-bottom:5px;letter-spacing:1px;">STACK FINAL</div>
+          <div style="color:#ccc;font-size:18px;font-weight:700;">$${stackFinal}</div>
+        </div>
+        <div style="background:rgba(${profit>0?'20,60,20':profit<0?'60,15,15':'30,30,30'},0.4);
+          border:1px solid ${profitColor}55;border-radius:10px;padding:12px 8px;">
+          <div style="color:#555;font-size:9px;margin-bottom:5px;letter-spacing:1px;">NETO</div>
+          <div style="color:${profitColor};font-size:18px;font-weight:700;">${profitLabel}</div>
         </div>
       </div>
-      <div style="color:#666;font-size:11px;margin-bottom:20px;">
-        Rondas jugadas esta sesión: <b style="color:#aaa">${roundsPlayed}</b>
+
+      <div style="background:rgba(212,160,23,0.06);border:1px solid #d4a01740;
+        border-radius:12px;padding:16px 20px;margin-bottom:20px;">
+        <div style="color:#666;font-size:9px;margin-bottom:5px;letter-spacing:2px;">BANCO ACTUALIZADO</div>
+        <div style="color:#ffd060;font-size:30px;font-weight:700;font-family:'Playfair Display',serif;">$${nuevoBank}</div>
+        <div style="color:#555;font-size:10px;margin-top:5px;">
+          ${profit === 0
+            ? 'Buy-in recuperado — banco sin cambios'
+            : profit > 0
+              ? `Ganaste $${profit} en ${roundsPlayed} ronda${roundsPlayed !== 1 ? 's' : ''}`
+              : `Perdiste $${Math.abs(profit)} en ${roundsPlayed} ronda${roundsPlayed !== 1 ? 's' : ''}`}
+        </div>
       </div>
+
       <button onclick="document.getElementById('exitSummaryModal').remove();"
         style="padding:12px 36px;
           background:linear-gradient(135deg,#d4a017,#8a6000);
           border:none;border-radius:10px;color:#000;font-size:15px;
           font-weight:700;cursor:pointer;letter-spacing:1px;
           box-shadow:0 4px 20px rgba(212,160,23,0.4);
-          font-family:'Rajdhani',sans-serif;">
+          font-family:'Rajdhani',sans-serif;transition:all 0.15s;"
+        onmouseover="this.style.transform='translateY(-2px)'"
+        onmouseout="this.style.transform='translateY(0)'">
         Volver al menú
       </button>
     </div>`;
@@ -3863,5 +3921,27 @@ console.log('  ✅ Bot thinking delay: 900-1500ms → 350-700ms');
 console.log('  ✅ ML seed: random puro → heurístico de poker real');
 console.log('%c[ML] El bot usará heurística hasta ~20 muestras reales, luego ML real', 'color:#4a9eff');
 </script>
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<script>
+  const socket = io();
+</script>
+<script>
+  const socket = io();
+
+  // obtener room del link
+  const params = new URLSearchParams(window.location.search);
+  const roomId = params.get("room");
+
+  if (roomId) {
+    socket.emit("joinRoom", roomId);
+  }
+
+  // escuchar jugadores
+  socket.on("playersUpdate", (players) => {
+    console.log("Jugadores en sala:", players);
+  });
+</script>
 </body>
 </html>
+
+

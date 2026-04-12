@@ -18,31 +18,35 @@ io.on("connection", (socket) => {
   console.log("Usuario conectado:", socket.id);
 
   // 🟢 CREAR SALA
-  socket.on("createRoom", (roomId) => {
-    socket.join(roomId);
+ socket.on("createRoom", (roomId) => {
+  socket.join(roomId);
 
-    rooms[roomId] = {
-      players: [socket.id]
-    };
+  rooms[roomId] = {
+    players: [socket.id]
+  };
 
-    console.log("Sala creada:", roomId);
-  });
+  // 🔥 enviar estado inicial
+  io.to(roomId).emit("playersUpdate", rooms[roomId].players);
+});
 
   // 🟢 UNIRSE A SALA
   socket.on("joinRoom", (roomId) => {
-    socket.join(roomId);
+  socket.join(roomId);
 
-    if (!rooms[roomId]) {
-      rooms[roomId] = { players: [] };
-    }
+  if (!rooms[roomId]) {
+    rooms[roomId] = { players: [] };
+  }
 
+  // evitar duplicados
+  if (!rooms[roomId].players.includes(socket.id)) {
     rooms[roomId].players.push(socket.id);
+  }
 
-    console.log("Jugador unido a:", roomId);
+  console.log("Jugador unido a:", roomId);
 
-    // 🔥 avisar a todos en la sala
-    io.to(roomId).emit("playersUpdate", rooms[roomId].players);
-  });
+  // 🔥 MANDAR ESTADO A TODOS (incluido host)
+  io.to(roomId).emit("playersUpdate", rooms[roomId].players);
+});
 
   // 🟢 INICIAR PARTIDA
   socket.on("startGame", (roomId) => {

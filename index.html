@@ -1,0 +1,3867 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Texas Hold'em Poker ML</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;1,400&family=Rajdhani:wght@500;700&family=Inter:wght@400;600;700&display=swap');
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --gold: #d4a017; --gold-light: #ffe07a; --gold-glow: rgba(212,160,23,0.35);
+  --blue-ml: #4a9eff; --blue-ml-dark: rgba(0,20,60,0.97);
+  --felt: #0d5220; --felt-dark: #0a3d18;
+  --panel-bg: rgba(8,5,0,0.96); --panel-border: #c8921a;
+}
+
+body {
+  background: #020102;
+  font-family: 'Rajdhani', 'Inter', sans-serif;
+  overflow: hidden; color: #fff;
+}
+
+/* ── Animated casino background behind canvas ── */
+body::before {
+  content: '';
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(ellipse 60% 55% at 50% 110%, rgba(13,82,32,0.18) 0%, transparent 70%),
+    radial-gradient(ellipse at 15% 45%, rgba(180,20,10,0.12) 0%, transparent 50%),
+    radial-gradient(ellipse at 85% 45%, rgba(15,30,160,0.12) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% -5%, rgba(212,160,23,0.08) 0%, transparent 45%);
+}
+
+#gameCanvas { display: block; position: relative; z-index: 1; will-change: transform; } /* ⚡ GPU layer hint */
+#ui { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
+
+/* ── Deep casino vignette ── */
+#ui::before {
+  content: '';
+  position: fixed; inset: 0;
+  background: radial-gradient(ellipse 85% 80% at 50% 50%, transparent 30%, rgba(0,0,0,0.6) 75%, rgba(0,0,0,0.88) 100%);
+  pointer-events: none; z-index: 1;
+}
+
+/* ── Neon glow pulser (CSS animation) ── */
+@keyframes neonPulse {
+  0%,100% { opacity:1; } 48% { opacity:0.85; } 50% { opacity:0.7; } 52% { opacity:0.85; }
+}
+/* ⚡ chipFloat movido a JS (animate loop) — CSS animation + JS animation en el mismo elemento causa conflictos */
+/* ⚡ OPTIMIZACIÓN: mlGlow reducido de 3s a 4s y blur eliminado del actionPanel
+   El blur (backdrop-filter) era el mayor culpable de lag en CSS — fuerza repaint de todo lo detrás */
+@keyframes mlGlow {
+  0%,100% { box-shadow: 0 0 12px rgba(74,158,255,0.25), inset 0 1px 0 rgba(100,180,255,0.08); }
+  50%      { box-shadow: 0 0 22px rgba(74,158,255,0.45), inset 0 1px 0 rgba(100,180,255,0.15); }
+}
+@keyframes goldShimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+@keyframes dealCard {
+  /* ⚡ Reducido de ~0.4s implícito a 0.2s — más responsivo al repartir cartas */
+  from { opacity:0; transform: translateY(-12px) scale(0.88); }
+  to   { opacity:1; transform: translateY(0) scale(1); }
+}
+@keyframes winPulse {
+  /* ⚡ Reducida intensidad del glow — menos repaint en GPU */
+  0%,100% { box-shadow: 0 0 40px rgba(212,160,23,0.25); }
+  50%      { box-shadow: 0 0 70px rgba(212,160,23,0.5); }
+}
+
+#bankUI {
+  position: fixed; top: 12px; right: 14px;
+  background: linear-gradient(135deg, rgba(20,12,0,0.97), rgba(40,25,0,0.97));
+  border: 1px solid var(--gold);
+  box-shadow: 0 0 20px var(--gold-glow), inset 0 1px 0 rgba(255,220,100,0.15);
+  border-radius: 10px; padding: 9px 16px; font-size: 13px;
+  color: var(--gold); pointer-events: none; z-index: 100;
+  letter-spacing: 0.5px; font-family: 'Rajdhani', sans-serif; font-weight: 500;
+}
+#bankUI span { color: var(--gold-light); font-weight: 700; font-size: 14px; }
+
+#infoBar {
+  position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+  background: linear-gradient(180deg, rgba(18,10,0,0.98), rgba(8,4,0,0.98));
+  border: 1px solid var(--gold);
+  box-shadow: 0 0 30px var(--gold-glow), inset 0 1px 0 rgba(255,220,100,0.12);
+  border-radius: 14px; padding: 10px 28px; font-size: 14px;
+  color: #f0d060; pointer-events: none; z-index: 100; text-align: center;
+  min-width: 300px;
+}
+#infoBar #phaseLabel {
+  font-family: 'Playfair Display', serif;
+  font-size: 18px; font-weight: 700; color: #ffd060;
+  text-shadow: 0 0 16px rgba(255,200,60,0.6), 0 0 32px rgba(255,160,0,0.2);
+  letter-spacing: 2px;
+}
+#infoBar #potLabel {
+  font-size: 13px; color: #e8c860; margin-top: 3px;
+  font-family: 'Rajdhani', sans-serif; font-weight: 600; letter-spacing: 1px;
+}
+#infoBar #msgLabel {
+  font-size: 11px; color: #777; margin-top: 4px; min-height: 16px; font-style: italic;
+}
+
+#mlBar {
+  position: fixed; top: 12px; left: 14px;
+  background: linear-gradient(135deg, rgba(0,8,28,0.98), rgba(0,18,52,0.98));
+  border: 1px solid #2a6aaa;
+  border-radius: 12px; padding: 10px 14px; font-size: 11px;
+  color: var(--blue-ml); pointer-events: none; z-index: 100;
+  min-width: 210px; line-height: 1.7;
+  /* ⚡ mlGlow: animation-duration 3s → 5s — menos repaints por segundo */
+  animation: mlGlow 5s ease-in-out infinite;
+  font-family: 'Rajdhani', sans-serif;
+}
+#mlBar b { font-size: 12px; letter-spacing: 0.5px; }
+#mlBar span { color: #aad4ff; font-weight: 600; }
+
+/* ONLINE STATUS BAR */
+#onlineBar {
+  position: fixed; bottom: 12px; left: 14px;
+  background: rgba(0,0,0,0.92); border: 1px solid #444;
+  border-radius: 10px; padding: 7px 14px; font-size: 11px;
+  color: #aaa; pointer-events: all; z-index: 100;
+  display: none; min-width: 180px;
+}
+#onlineBar .online-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #555; margin-right: 5px; }
+#onlineBar .online-dot.connected { background: #44cc44; box-shadow: 0 0 6px #44cc44; animation: neonPulse 2s infinite; }
+#onlineBar .copy-link-btn {
+  display: block; margin-top: 4px; background: #2d1a5a; border: 1px solid #8855ff;
+  color: #c8a0ff; padding: 4px 10px; border-radius: 5px; font-size: 11px;
+  cursor: pointer; text-align: center; width: 100%;
+}
+#onlineBar .copy-link-btn:hover { background: #3d2a7a; }
+
+/* ── Premium Playing Cards ── */
+#playerHand {
+  position: fixed; bottom: 145px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 12px; pointer-events: none; z-index: 100;
+}
+.hand-card {
+  width: 60px; height: 90px;
+  background: linear-gradient(160deg, #ffffff 0%, #f8f4ef 60%, #f0e8e0 100%);
+  border-radius: 9px;
+  border: 1.5px solid rgba(0,0,0,0.15);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; font-weight: 900;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.9); /* ⚡ sombra simplificada */
+  flex-direction: column; gap: 2px;
+  transition: transform 0.15s ease-out;
+  animation: dealCard 0.2s ease-out;
+  will-change: transform; /* ⚡ promueve al compositor GPU */
+  cursor: default;
+}
+.hand-card:hover { transform: translateY(-8px) scale(1.05); }
+.hand-card.red { color: #cc0000; text-shadow: 0 1px 3px rgba(180,0,0,0.15); }
+.hand-card.black { color: #0a0a0a; }
+.hand-card .card-rank { font-size: 19px; line-height: 1; font-family: 'Playfair Display', serif; }
+.hand-card .card-suit { font-size: 22px; line-height: 1; }
+
+/* Community cards match style */
+#communityCards {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  display: flex; gap: 10px; pointer-events: none; z-index: 100; margin-top: -20px;
+}
+/* ⚡ reducida de 0.4s a 0.2s — más responsivo */
+#communityCards .hand-card { animation: dealCard 0.2s ease-out; }
+
+/* Bot showdown hands panel */
+#showdownPanel {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  display: none; z-index: 150; pointer-events: none;
+  flex-direction: column; align-items: center; gap: 10px;
+  margin-top: 90px;
+}
+.showdown-row {
+  display: flex; align-items: center; gap: 8px;
+  background: linear-gradient(135deg, rgba(10,6,0,0.95), rgba(20,12,0,0.95));
+  border: 1px solid #555; border-radius: 10px;
+  padding: 6px 12px; min-width: 280px;
+}
+.showdown-row.winner-row { border-color: var(--gold); box-shadow: 0 0 20px var(--gold-glow); }
+.showdown-name { font-size: 12px; color: #bbb; min-width: 90px; font-weight: 600; white-space: nowrap; }
+.showdown-row.winner-row .showdown-name { color: #ffd060; }
+.showdown-cards { display: flex; gap: 5px; }
+.sd-card {
+  width: 38px; height: 54px;
+  background: linear-gradient(145deg, #fff, #eee);
+  border-radius: 5px; border: 1px solid #ccc;
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; font-size: 13px; font-weight: 800;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+}
+.sd-card.red { color: #cc0000; }
+.sd-card.black { color: #111; }
+.showdown-handname { font-size: 11px; color: #888; margin-left: 6px; font-style: italic; }
+.showdown-row.winner-row .showdown-handname { color: #ffd060; font-weight: 700; }
+
+/* ── Premium Action Panel ── */
+#actionPanel {
+  position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+  background: linear-gradient(180deg, rgba(14,9,0,0.99), rgba(6,4,0,0.99));
+  border: 1px solid var(--panel-border);
+  box-shadow: 0 0 30px rgba(212,160,23,0.2), 0 -4px 20px rgba(0,0,0,0.5),
+              inset 0 1px 0 rgba(255,220,80,0.08);
+  border-radius: 16px; padding: 14px 22px; pointer-events: all;
+  z-index: 100; display: none; min-width: 400px; text-align: center;
+  /* ⚡ backdrop-filter eliminado — era el mayor causante de lag CSS en el panel de acción */
+}
+#actionPanel .phase-tag {
+  font-family: 'Playfair Display', serif;
+  font-size: 11px; color: var(--gold); margin-bottom: 10px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: 3px;
+  opacity: 0.9;
+}
+#actionPanel .slider-row {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+}
+#actionPanel label { font-size: 12px; color: #777; min-width: 55px; font-family: 'Rajdhani', sans-serif; }
+#raiseSlider {
+  flex: 1; appearance: none; height: 5px;
+  background: linear-gradient(90deg, var(--gold), #5a3800);
+  border-radius: 3px; outline: none; cursor: pointer;
+}
+#raiseSlider::-webkit-slider-thumb {
+  appearance: none; width: 18px; height: 18px; border-radius: 50%;
+  background: radial-gradient(circle, #ffe07a, var(--gold));
+  box-shadow: 0 0 8px rgba(212,160,23,0.8); cursor: pointer;
+  transition: transform 0.1s;
+}
+#raiseSlider::-webkit-slider-thumb:hover { transform: scale(1.2); }
+#raiseValue { font-size: 15px; color: var(--gold-light); min-width: 80px; text-align: right; font-weight: 700; font-family: 'Rajdhani', sans-serif; }
+#actionPanel .btn-row { display: flex; gap: 8px; justify-content: center; }
+.btn {
+  padding: 10px 22px; border: none; border-radius: 9px; font-size: 14px;
+  font-weight: 700; cursor: pointer; transition: all 0.15s cubic-bezier(.34,1.56,.64,1);
+  letter-spacing: 0.5px; font-family: 'Rajdhani', sans-serif;
+}
+.btn:hover { filter: brightness(1.25); transform: translateY(-3px); box-shadow: 0 6px 18px rgba(0,0,0,0.6); }
+.btn:active { transform: translateY(0) scale(0.97); }
+.btn-fold  { background: linear-gradient(135deg, #8b0000, #5a0000); color: #ffaaaa; border: 1px solid #aa2222; }
+.btn-check { background: linear-gradient(135deg, #2d5a27, #1a3818); color: #aaffaa; border: 1px solid #449944; }
+.btn-call  { background: linear-gradient(135deg, #1a4a8a, #0a2a60); color: #aaccff; border: 1px solid #2255aa; }
+.btn-raise { background: linear-gradient(135deg, #9a7000, #5a4000); color: #ffe080; border: 1px solid #cc9900; }
+
+#addBot6Btn {
+  position: fixed; bottom: 14px; right: 14px;
+  background: linear-gradient(135deg, #2d1a5a, #1a0e3a);
+  border: 1px solid #8855ff;
+  box-shadow: 0 0 16px rgba(136,85,255,0.3);
+  color: #c8a0ff; padding: 10px 18px; border-radius: 10px;
+  font-size: 13px; cursor: pointer; pointer-events: all;
+  z-index: 100; display: none; font-weight: 700;
+  font-family: 'Rajdhani', sans-serif; letter-spacing: 0.5px;
+  animation: mlGlow 5s ease-in-out infinite;
+}
+#addBot6Btn:hover { background: #3d2a7a; box-shadow: 0 0 28px rgba(136,85,255,0.6); }
+
+/* ── Exit Room Button ── */
+#exitRoomBtn {
+  position: fixed; bottom: 60px; right: 14px;
+  background: linear-gradient(135deg, #3a0a0a, #1e0505);
+  border: 1px solid #882222;
+  box-shadow: 0 0 12px rgba(180,30,30,0.3);
+  color: #ffaaaa; padding: 10px 18px; border-radius: 10px;
+  font-size: 13px; cursor: pointer; pointer-events: all;
+  z-index: 100; display: none; font-weight: 700;
+  font-family: 'Rajdhani', sans-serif; letter-spacing: 0.5px;
+  transition: all 0.15s;
+}
+#exitRoomBtn:hover {
+  background: linear-gradient(135deg, #5a1010, #3a0808);
+  box-shadow: 0 0 20px rgba(200,40,40,0.5);
+  transform: translateY(-2px);
+}
+
+/* ── ML Level Progress Bar ── */
+#mlLevelBar {
+  margin-top: 5px;
+  height: 5px;
+  background: rgba(74,158,255,0.15);
+  border-radius: 3px;
+  overflow: hidden;
+}
+#mlLevelBarFill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #1a4aaa, #4a9eff);
+  transition: width 0.6s ease;
+}
+#mlLevelLabel {
+  font-size: 9px;
+  color: #6aabee;
+  margin-top: 2px;
+  letter-spacing: 0.3px;
+}
+
+/* ── Winner Overlay ── */
+#winnerOverlay {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(0,0,0,0.88);
+  /* ⚡ backdrop-filter eliminado — fuerza composite de todos los elementos detrás */
+  display: none; align-items: center;
+  justify-content: center; z-index: 200; pointer-events: all;
+}
+#winnerBox {
+  background: linear-gradient(160deg, #1e1500, #0c0800);
+  border: 2px solid var(--gold);
+  border-radius: 20px; padding: 32px 44px; text-align: center;
+  max-width: 520px; width: 92%;
+  animation: winPulse 2s ease-in-out infinite;
+}
+#winnerBox h2 {
+  font-family: 'Playfair Display', serif;
+  color: #ffd060; font-size: 30px; margin-bottom: 8px;
+  text-shadow: 0 0 24px rgba(255,200,60,0.6);
+}
+#winnerBox p { color: #ddd; margin-bottom: 6px; font-size: 15px; font-family: 'Rajdhani', sans-serif; }
+#winnerBox .hand-desc {
+  color: #ffd060; font-size: 22px; font-weight: 700; margin: 14px 0;
+  text-shadow: 0 0 14px rgba(255,200,60,0.5);
+  font-family: 'Playfair Display', serif; font-style: italic;
+}
+#winnerBox button {
+  margin-top: 18px; padding: 13px 40px;
+  background: linear-gradient(135deg, var(--gold), #8a6000);
+  border: none; border-radius: 10px; color: #000; font-size: 15px;
+  font-weight: 700; cursor: pointer; letter-spacing: 1px;
+  box-shadow: 0 4px 20px rgba(212,160,23,0.5);
+  transition: all 0.15s; font-family: 'Rajdhani', sans-serif;
+}
+#winnerBox button:hover { background: linear-gradient(135deg, #f0c030, #c08820); transform: translateY(-2px) scale(1.02); }
+
+/* Showdown hands in winner box */
+#winnerHandsGrid {
+  display: flex; flex-wrap: wrap; justify-content: center;
+  gap: 8px; margin: 14px 0; max-height: 220px; overflow-y: auto;
+}
+.wh-row {
+  display: flex; align-items: center; gap: 6px;
+  background: rgba(255,255,255,0.03); border: 1px solid #333;
+  border-radius: 8px; padding: 6px 10px;
+}
+.wh-row.is-winner { border-color: var(--gold); background: rgba(212,160,23,0.07); }
+.wh-name { font-size: 11px; color: #999; min-width: 70px; font-weight: 600; font-family: 'Rajdhani', sans-serif; }
+.wh-row.is-winner .wh-name { color: #ffd060; }
+.wh-cards { display: flex; gap: 4px; }
+.wh-card {
+  width: 32px; height: 46px;
+  background: linear-gradient(145deg, #fff, #eee);
+  border-radius: 4px; border: 1px solid #ccc;
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; font-size: 11px; font-weight: 800;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.5); line-height: 1.1;
+}
+.wh-card.red { color: #cc0000; }
+.wh-card.black { color: #111; }
+.wh-handname { font-size: 10px; color: #777; margin-left: 4px; font-style: italic; white-space: nowrap; }
+.wh-row.is-winner .wh-handname { color: #ffc040; font-weight: 700; }
+
+/* ── Lobby ── */
+#lobbyOverlay {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: radial-gradient(ellipse at center, rgba(10,5,0,0.97) 0%, rgba(0,0,0,0.99) 100%);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 300; pointer-events: all;
+}
+#lobbyBox {
+  background: linear-gradient(160deg, #1c1400, #0e0b00);
+  border: 2px solid var(--gold);
+  box-shadow: 0 0 60px rgba(212,160,23,0.2);
+  border-radius: 18px; padding: 36px 44px; text-align: center;
+  max-width: 460px; width: 90%;
+}
+#lobbyBox h1 {
+  color: var(--gold); font-size: 28px; margin-bottom: 4px;
+  font-family: 'Playfair Display', serif;
+  text-shadow: 0 0 20px rgba(212,160,23,0.4);
+}
+#lobbyBox .subtitle { color: #888; font-size: 13px; margin-bottom: 24px; font-family: 'Rajdhani', sans-serif; letter-spacing: 1px; }
+#lobbyBox .field-label { color: var(--gold); font-size: 11px; text-align: left; margin-bottom: 4px; font-weight: bold; letter-spacing: 1.5px; font-family: 'Rajdhani', sans-serif; }
+#lobbyBox input[type=text] {
+  width: 100%; background: rgba(0,0,0,0.5); border: 1px solid #444; color: #fff;
+  border-radius: 8px; padding: 10px 14px; font-size: 15px; margin-bottom: 16px;
+  outline: none; font-family: 'Rajdhani', sans-serif; letter-spacing: 0.5px;
+  transition: border-color 0.2s;
+}
+#lobbyBox input[type=text]:focus { border-color: var(--gold); box-shadow: 0 0 8px rgba(212,160,23,0.2); }
+.lobby-mode-row { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+.mode-btn {
+  flex: 1; min-width: 80px; padding: 10px 6px; border-radius: 8px; border: 2px solid #444;
+  background: rgba(0,0,0,0.4); color: #888; font-size: 12px; font-weight: bold;
+  cursor: pointer; transition: all 0.15s; font-family: 'Rajdhani', sans-serif; letter-spacing: 0.5px;
+}
+.mode-btn.active { border-color: var(--gold); color: var(--gold); background: rgba(212,160,23,0.08); }
+.mode-btn:hover { border-color: var(--gold); color: var(--gold); }
+#lobbyBox .start-btn {
+  width: 100%; padding: 14px; background: linear-gradient(135deg, var(--gold), #8a6000);
+  border: none; border-radius: 10px; color: #000; font-size: 17px; font-weight: bold;
+  cursor: pointer; margin-top: 6px; font-family: 'Rajdhani', sans-serif; letter-spacing: 1px;
+  box-shadow: 0 4px 20px rgba(212,160,23,0.3); transition: all 0.15s;
+}
+#lobbyBox .start-btn:hover { background: linear-gradient(135deg, #f0c030, #b07010); transform: translateY(-1px); }
+#roomInfo {
+  margin-top: 16px; padding: 14px; background: rgba(255,255,255,0.03);
+  border-radius: 10px; border: 1px solid #333; display: none;
+}
+#roomInfo .room-code {
+  color: var(--gold); font-size: 22px; font-weight: bold; letter-spacing: 5px;
+  font-family: 'Rajdhani', sans-serif;
+  text-shadow: 0 0 12px rgba(212,160,23,0.4);
+}
+#roomInfo .room-sub { color: #888; font-size: 11px; margin-top: 4px; }
+#roomInfo .players-list { margin-top: 10px; font-size: 12px; color: #ccc; }
+#roomInfo .copy-btn {
+  margin-top: 10px; display: inline-block; background: #2d1a5a; border: 1px solid #8855ff;
+  color: #c8a0ff; padding: 6px 16px; border-radius: 6px; font-size: 12px; cursor: pointer;
+}
+#roomInfo .copy-btn:hover { background: #3d2a7a; }
+#waitingMsg { color: var(--gold-light); font-size: 13px; margin-top: 10px; display: none; font-family: 'Rajdhani', sans-serif; }
+
+/* ── Player labels ── */
+.player-label {
+  position: fixed; pointer-events: none; z-index: 90; white-space: nowrap;
+  background: rgba(0,0,0,0.82); border: 1px solid #555; border-radius: 8px;
+  padding: 4px 10px; font-family: 'Rajdhani', sans-serif; font-size: 12px;
+  color: #fff; /* ⚡ backdrop-filter blur(2px) eliminado — hay hasta 7 labels simultáneos */
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.player-label.active-turn {
+  border-color: var(--gold);
+  box-shadow: 0 0 12px rgba(212,160,23,0.7);
+  animation: neonPulse 1s ease-in-out infinite;
+}
+.player-label.folded { color: #444; border-color: #333; }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<div id="ui">
+  <div id="bankUI">Banco: <span id="bankAmount">20000</span> | Fichas: <span id="chipsAmount">1000</span></div>
+  <div id="infoBar">
+    <div id="phaseLabel">Texas Hold'em ML</div>
+    <div id="potLabel">Pozo: 0</div>
+    <div id="msgLabel">Presiona "Nueva Mano" para comenzar</div>
+  </div>
+  <div id="mlBar">
+    🤖 <b style="color:#ffe066">Bot ML</b> &nbsp;|&nbsp;
+    Nivel: <span id="mlLevelSpan" style="color:#ffe066">0</span> &nbsp;|&nbsp;
+    Rondas: <span id="roundsSpan">0</span><br>
+    <span id="mlStatsSpan" style="color:#aaf;font-size:10px;">Dataset: esperando ronda 5...</span><br>
+    <span id="mlTrainSpan" style="color:#88ff88;font-size:10px;">Train/Val acc: —</span> &nbsp;
+    <span id="mlTestSpan" style="color:#ffaa44;font-size:10px;">Test acc: —</span><br>
+    <span id="mlBiasSpan" style="color:#ff88aa;font-size:10px;">Estado: —</span><br>
+    <span id="mlExploreSpan" style="color:#ffcc66;font-size:10px;">Exploración: 40% 🎲</span>
+    <div id="mlLevelBar"><div id="mlLevelBarFill" style="width:0%"></div></div>
+    <div id="mlLevelLabel">Novato — aprendiendo básicos</div>
+  </div>
+  <div id="playerHand"></div>
+  <div id="communityCards"></div>
+  <div id="actionPanel">
+    <div class="phase-tag" id="actionPhaseTag">Preflop</div>
+    <div class="slider-row">
+      <label>Raise:</label>
+      <input type="range" id="raiseSlider" min="20" max="1000" value="20" step="10">
+      <div id="raiseValue">$20</div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-fold" onclick="playerAction('fold')">Fold</button>
+      <button class="btn btn-check" id="btnCheck" onclick="playerAction('check')">Check</button>
+      <button class="btn btn-call" id="btnCall" onclick="playerAction('call')">Call $0</button>
+      <button class="btn btn-raise" onclick="playerAction('raise')">Raise</button>
+    </div>
+  </div>
+  <button id="addBot6Btn" onclick="addBot6()">🧠 Agregar Bot ML (ronda 6)</button>
+  <button id="exitRoomBtn" onclick="exitRoom()">🚪 Salir de la sala</button>
+
+  <!-- ML Performance Panel -->
+  <div id="mlPerfPanel" style="
+    position:fixed; bottom:12px; right:14px; display:none;
+    background:linear-gradient(135deg,rgba(0,10,35,0.97),rgba(0,20,60,0.97));
+    border:1px solid #2a6aaa; border-radius:10px; padding:10px 14px;
+    font-size:10px; color:#4a9eff; z-index:100; min-width:200px;
+    box-shadow:0 0 16px rgba(74,158,255,0.2);">
+    <div style="font-size:11px;font-weight:bold;color:#ffe066;margin-bottom:4px;">📊 ML Performance — Split 70/15/15</div>
+
+    <!-- Chart 1: Accuracy over time -->
+    <div style="font-size:9px;color:#aad4ff;margin-bottom:2px;">Accuracy por ronda</div>
+    <canvas id="mlChartCanvas" width="176" height="56" style="display:block;border-radius:4px;background:rgba(0,0,0,0.4);"></canvas>
+    <div style="margin-top:3px;display:flex;gap:8px;font-size:9px;">
+      <span style="color:#44ff88">■ Train</span>
+      <span style="color:#ffe066">╌ Val</span>
+      <span style="color:#ff8844">■ Test</span>
+    </div>
+    <div id="mlPerfLabel" style="color:#aad4ff;margin-top:2px;font-size:9px;min-height:12px;"></div>
+
+    <!-- Chart 2: Action distribution bar chart -->
+    <div style="font-size:9px;color:#aad4ff;margin-top:6px;margin-bottom:2px;">Distribución de acciones (train set)</div>
+    <canvas id="mlActionCanvas" width="176" height="52" style="display:block;border-radius:4px;background:rgba(0,0,0,0.4);"></canvas>
+
+    <!-- Chart 3: Bot ML Win Rate over time -->
+    <div style="font-size:9px;color:#aad4ff;margin-top:6px;margin-bottom:2px;">Win Rate Bot ML (por ronda)</div>
+    <canvas id="mlWinRateCanvas" width="176" height="48" style="display:block;border-radius:4px;background:rgba(0,0,0,0.4);"></canvas>
+    <div style="margin-top:3px;display:flex;gap:8px;font-size:9px;">
+      <span style="color:#cc88ff">■ WR Bot ML</span>
+      <span style="color:rgba(255,220,60,0.5)">╌ 50%</span>
+    </div>
+
+    <!-- Weights readout -->
+    <div style="font-size:9px;color:#aad4ff;margin-top:6px;margin-bottom:2px;">Pesos aprendidos (regresión logística)</div>
+    <div id="mlWeightsDisplay" style="font-size:8px;color:#88bbff;line-height:1.5;font-family:monospace;"></div>
+  </div>
+
+  <!-- Online status bar -->
+  <div id="onlineBar">
+    <span class="online-dot" id="onlineDot"></span>
+    <span id="onlineStatus">Sin conexión</span>
+    <button class="copy-link-btn" onclick="copyInviteLink()">📋 Copiar link de invitación</button>
+  </div>
+</div>
+
+<div id="winnerOverlay">
+  <div id="winnerBox">
+    <h2 id="winnerTitle">Ganador</h2>
+    <p id="winnerName"></p>
+    <div class="hand-desc" id="winnerHand"></div>
+    <p id="winnerPot"></p>
+    <div id="winnerHandsGrid"></div>
+    <button onclick="nextHand()">Nueva Mano</button>
+  </div>
+</div>
+
+<!-- LOBBY SCREEN -->
+<div id="lobbyOverlay">
+  <div id="lobbyBox">
+    <h1>🃏 Texas Hold'em ML</h1>
+    <p class="subtitle">POKER CON INTELIGENCIA ARTIFICIAL ADAPTATIVA</p>
+
+    <div class="field-label">TU NOMBRE</div>
+    <input type="text" id="playerNameInput" placeholder="Ej: Nacho, El Máquina..." maxlength="16" value="">
+
+    <div class="field-label">MODO DE JUEGO</div>
+    <div class="lobby-mode-row">
+      <button class="mode-btn active" id="modeLocal" onclick="selectMode('local')">🤖 vs Bots</button>
+      <button class="mode-btn" id="modeMulti" onclick="selectMode('multi')">👥 Local Multijugador</button>
+      <button class="mode-btn" id="modeCreate" onclick="selectMode('create')">🌐 Crear sala</button>
+      <button class="mode-btn" id="modeJoin" onclick="selectMode('join')">🔗 Unirse</button>
+    </div>
+
+    <!-- Local multiplayer: add extra human players -->
+    <div id="multiPlayerFields" style="display:none;text-align:left;">
+      <div class="field-label" style="margin-bottom:6px;">JUGADORES EN ESTE DISPOSITIVO</div>
+      <div id="extraPlayersContainer">
+        <!-- Extra player name fields added dynamically -->
+      </div>
+      <button onclick="addExtraPlayer()" style="
+        background:#1a2a1a;border:1px dashed #449944;color:#88cc88;
+        border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;margin-bottom:12px;width:100%;">
+        + Agregar jugador (máx. 4 humanos)
+      </button>
+      <div style="font-size:10px;color:#777;margin-bottom:10px;">
+        💡 Los turnos se pasan de mano en mano en el mismo dispositivo.
+      </div>
+    </div>
+
+    <!-- Join room code input (hidden unless join mode) -->
+    <div id="joinCodeField" style="display:none">
+      <div class="field-label">CÓDIGO DE SALA</div>
+      <input type="text" id="roomCodeInput" placeholder="Ej: ABC123" maxlength="6" style="text-transform:uppercase;letter-spacing:3px;text-align:center;">
+    </div>
+
+    <button class="start-btn" id="lobbyStartBtn" onclick="lobbyStart()">Jugar</button>
+
+    <!-- Room info (shown after creating) -->
+    <div id="roomInfo">
+      <div class="room-code" id="roomCodeDisplay"></div>
+      <div class="room-sub">Compartí este link con otros jugadores:</div>
+      <div id="roomLinkDisplay" style="
+        background:#0a0800;border:1px solid #555;border-radius:6px;
+        padding:7px 10px;font-size:10px;color:#aaa;word-break:break-all;
+        margin:6px 0;font-family:monospace;text-align:left;cursor:pointer;"
+        onclick="copyInviteLink()" title="Click para copiar">
+        🔗 generando link...
+      </div>
+      <div class="players-list" id="roomPlayersList"></div>
+      <button class="copy-btn" onclick="copyInviteLink()">📋 Copiar link de invitación</button>
+    </div>
+    <div id="waitingMsg">⏳ Esperando jugadores... <span id="waitingCount">1</span>/6</div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// CONSTANTES Y ESTADO
+// ============================================================
+const SUITS = ['♠','♥','♦','♣'];
+const SUIT_NAMES = ['spades','hearts','diamonds','clubs'];
+const RANKS = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
+const RANK_VALUES = {2:2,3:3,4:4,5:5,6:6,7:7,8:8,9:9,10:10,J:11,Q:12,K:13,A:14};
+const HAND_NAMES = ['Carta Alta','Par','Doble Par','Trío','Escalera','Color','Full House','Poker','Escalera de Color','Escalera Real'];
+const PHASES = ['preflop','flop','turn','river','showdown'];
+const PHASE_LABELS = { preflop: 'Pre-Flop', flop: 'Flop', turn: 'Turn', river: 'River', showdown: 'Showdown' };
+
+let deck = [], communityCards = [], pot = 0, currentBet = 0, roundsPlayed = 0;
+let mlLevel = 0;
+let globalBank = 20000; // ── BANCO GLOBAL: persiste entre partidas ──
+// ── ML Knowledge ──────────────────────────────────────────────
+let mlKnowledge = {
+  winRates: {},
+  raiseFreq: 0.3,
+  botStats: {},
+  humanStyle: { raiseFreq: 0, foldFreq: 0, actions: 0, avgBetSize: 0 }
+};
+
+// ── ML Dataset (real train/validation/test split 70/15/15) ────────────────────────
+// Each sample: { handStrength, phase, potOdds, potSize, humanRaiseFreq,
+//               humanFoldFreq, action (0=fold,1=call,2=raise), outcome (1=win,0=lose) }
+//
+// SPLIT STRATEGY:
+//   70% Training   → used for gradient-descent weight learning
+//   15% Validation → used to tune hyperparams & detect overfitting early
+//   15% Test       → held-out, only used to report real-world performance
+//
+// WHY SEPARATE VALIDATION FROM TEST?
+//   If you tune based on test set accuracy, you inadvertently "train" on it.
+//   Validation catches this: it's used to pick the best model checkpoint,
+//   while test gives an unbiased final estimate.
+const mlDataset = {
+  all: [],          // full history
+  trainSet: [],     // 70% for gradient descent
+  valSet:   [],     // 15% for validation / overfitting detection
+  testSet:  [],     // 15% for final unbiased evaluation
+  trainAccuracy: 0,
+  valAccuracy:   0, // NEW: validation accuracy
+  testAccuracy: 0,
+  retrainInterval: 3, // retrain every N rounds
+  lastRetrain: 0,
+  // Learned weights (logistic regression aproximada)
+  // CALIBRACIÓN CORRECTA — verificada analíticamente:
+  //   Mano débil  (hs≈0.25) → winProb ≈ 0.32 → fold/check leaning (softmax)
+  //   Mano marginal(hs≈0.38) → winProb ≈ 0.43 → call zone
+  //   Mano media  (hs≈0.55) → winProb ≈ 0.57 → call/raise mix
+  //   Mano fuerte (hs≈0.78) → winProb ≈ 0.77 → raise leaning
+  //   AA preflop  (hs≈0.95) → winProb ≈ 0.80 → raise
+  // BUG ORIGINAL: bias=-0.2 con handStrength=2.5 daba prob~0.45 para mano media
+  // → threshold raise>0.72 era inalcanzable → siempre fold/check
+  weights: {
+    handStrength:  3.0,   // predictor principal, bien calibrado
+    potOdds:      -0.8,   // pot odds altos → más riesgo
+    potSize:       0.2,   // pot grande = oportunidad
+    humanFoldFreq: 0.4,   // si human fold mucho → explotar
+    humanRaiseFreq:-0.2,  // si human agresivo → cuidado
+    phase:         0.3,   // fases tardías → info = confianza
+    bias:         -1.5    // FIX: bias negativo calibrado para spread correcto
+  },
+  // Regularization parameter (prevents overfitting)
+  lambda: 0.1,
+  // Bias-variance state
+  biasVarianceState: 'underfitting', // 'underfitting' | 'balanced' | 'overfitting'
+  roundsWithBot: 0,
+  consecutiveTrainWins: 0,
+  consecutiveTestLosses: 0
+};
+
+function addMLSample(handStrength, phase, potOdds, potSize, action, didWin) {
+  const phaseNum = {preflop:0, flop:1, turn:2, river:3}[phase] || 0;
+  const sample = {
+    handStrength,
+    phase: phaseNum,
+    potOdds,
+    potSize: Math.min(potSize / 1000, 1), // normalize
+    humanRaiseFreq: mlKnowledge.humanStyle.raiseFreq,
+    humanFoldFreq: mlKnowledge.humanStyle.foldFreq,
+    action,   // 0=fold, 1=call/check, 2=raise
+    outcome: didWin ? 1 : 0
+  };
+  mlDataset.all.push(sample);
+  // No data leakage: only add to train/test after collecting
+}
+
+function splitDataset() {
+  // ── 70 / 15 / 15 split ─────────────────────────────────────────
+  // Shuffle deterministically to avoid data leakage across splits.
+  // We use a Fisher-Yates shuffle on a copy, never on mlDataset.all.
+  const shuffled = [...mlDataset.all].sort(() => Math.random() - 0.5);
+  const n = shuffled.length;
+  const trainEnd = Math.floor(n * 0.70);
+  const valEnd   = Math.floor(n * 0.85); // 70+15 = 85%
+  mlDataset.trainSet = shuffled.slice(0, trainEnd);
+  mlDataset.valSet   = shuffled.slice(trainEnd, valEnd);
+  mlDataset.testSet  = shuffled.slice(valEnd);
+  // Validation set is used ONLY to detect overfitting:
+  //   if trainAcc >> valAcc → overfitting
+  //   if both are low       → underfitting
+  // Test set NEVER influences training decisions — it gives the final grade.
+}
+
+function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+
+function mlPredict(sample, weights) {
+  // Logistic regression: predict probability of winning with raise
+  const z = weights.bias
+    + weights.handStrength  * sample.handStrength
+    + weights.potOdds       * sample.potOdds
+    + weights.potSize       * sample.potSize
+    + weights.humanFoldFreq * sample.humanFoldFreq
+    + weights.humanRaiseFreq* sample.humanRaiseFreq
+    + weights.phase         * (sample.phase / 3);
+  return sigmoid(z);
+}
+
+function computeAccuracy(dataset, weights) {
+  if(dataset.length === 0) return 0;
+  let correct = 0;
+  dataset.forEach(s => {
+    const prob = mlPredict(s, weights);
+    const predicted = prob > 0.5 ? 1 : 0;
+    if(predicted === s.outcome) correct++;
+  });
+  return correct / dataset.length;
+}
+
+function trainWeights() {
+  // Gradient descent on training set with L2 regularization
+  if(mlDataset.trainSet.length < 5) return;
+  const lr = 0.08;
+  const w = { ...mlDataset.weights };
+  const n = mlDataset.trainSet.length;
+
+  for(let iter = 0; iter < 40; iter++) {
+    const grads = { bias:0, handStrength:0, potOdds:0, potSize:0,
+                    humanFoldFreq:0, humanRaiseFreq:0, phase:0 };
+    mlDataset.trainSet.forEach(s => {
+      const prob = mlPredict(s, w);
+      const err = prob - s.outcome;
+      grads.bias          += err;
+      grads.handStrength  += err * s.handStrength;
+      grads.potOdds       += err * s.potOdds;
+      grads.potSize       += err * s.potSize;
+      grads.humanFoldFreq += err * s.humanFoldFreq;
+      grads.humanRaiseFreq+= err * s.humanRaiseFreq;
+      grads.phase         += err * (s.phase / 3);
+    });
+    Object.keys(grads).forEach(k => {
+      const reg = k === 'bias' ? 0 : mlDataset.lambda * w[k]; // L2 reg
+      w[k] -= lr * (grads[k] / n + reg);
+    });
+  }
+  mlDataset.weights = w;
+}
+
+// ── ML Performance Chart ────────────────────────────────────────
+const mlHistory = { train: [], val: [], test: [], actionDist: [], winRateHistory: [] };
+
+function drawMLChart() {
+  const canvas = document.getElementById('mlChartCanvas');
+  if(!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  if(mlHistory.train.length < 2) {
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.font = '9px monospace';
+    ctx.fillText('Esperando datos...', 20, H/2);
+    return;
+  }
+
+  const n = mlHistory.train.length;
+  const xStep = W / Math.max(n - 1, 1);
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+  ctx.lineWidth = 1;
+  [0.25, 0.5, 0.75].forEach(y => {
+    ctx.beginPath(); ctx.moveTo(0, H*(1-y)); ctx.lineTo(W, H*(1-y)); ctx.stroke();
+    ctx.fillStyle='rgba(255,255,255,0.2)'; ctx.font='8px monospace';
+    ctx.fillText(`${(y*100).toFixed(0)}%`, 2, H*(1-y)-2);
+  });
+
+  // Draw line helper
+  function drawLine(data, color, dash=[]) {
+    if(!data || data.length < 2) return;
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.setLineDash(dash); ctx.beginPath();
+    data.forEach((v, i) => {
+      const x = i * xStep, y = H * (1 - Math.max(0, Math.min(1, v)));
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  drawLine(mlHistory.train, '#44ff88');
+  drawLine(mlHistory.val,   '#ffe066', [3,3]); // NEW: validation as dashed
+  drawLine(mlHistory.test,  '#ff8844');
+
+  // Dots at last point
+  [[mlHistory.train,'#44ff88'],[mlHistory.val,'#ffe066'],[mlHistory.test,'#ff8844']].forEach(([d,c]) => {
+    if(!d || !d.length) return;
+    const last = d[d.length-1];
+    ctx.fillStyle = c; ctx.beginPath();
+    ctx.arc((n-1)*xStep, H*(1-last), 3, 0, Math.PI*2); ctx.fill();
+  });
+
+  // Overfitting label
+  const gap = (mlHistory.train[n-1]||0) - (mlHistory.val[n-1]||0);
+  const label = gap > 0.15 ? '⚠️ Overfitting' : gap < 0 ? '📈 Mejorando' : '✅ Generaliza bien';
+  const perfEl = document.getElementById('mlPerfLabel');
+  if(perfEl) perfEl.textContent = label;
+}
+
+// ── NEW: Action Distribution Bar Chart ─────────────────────────────────────────────
+function drawActionDistChart() {
+  const canvas = document.getElementById('mlActionCanvas');
+  if(!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  if(!mlHistory.actionDist.length) return;
+  const latest = mlHistory.actionDist[mlHistory.actionDist.length - 1];
+
+  const bars = [
+    { label: 'Fold',  value: latest.fold,  color: '#ff4444' },
+    { label: 'Call',  value: latest.call,  color: '#4488ff' },
+    { label: 'Raise', value: latest.raise, color: '#44cc44' }
+  ];
+  const bw = (W - 24) / 3;
+  bars.forEach((b, i) => {
+    const x = 8 + i * (bw + 4);
+    const barH = Math.max(2, b.value * (H - 18));
+    ctx.fillStyle = b.color + '44';
+    ctx.fillRect(x, H - 16, bw, -(H-18));
+    ctx.fillStyle = b.color;
+    ctx.fillRect(x, H - 16 - barH, bw, barH);
+    ctx.fillStyle = '#fff';
+    ctx.font = '8px monospace';
+    ctx.fillText(b.label, x + 2, H - 4);
+    ctx.fillText(`${(b.value*100).toFixed(0)}%`, x + 2, H - 16 - barH - 2);
+  });
+}
+
+// ── NEW: Win Rate over time chart ─────────────────────────────────────────────
+function drawWinRateChart() {
+  const canvas = document.getElementById('mlWinRateCanvas');
+  if(!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const data = mlHistory.winRateHistory;
+  if(data.length < 2) {
+    ctx.fillStyle='rgba(255,255,255,0.2)'; ctx.font='8px monospace';
+    ctx.fillText('Esperando datos...', 5, H/2); return;
+  }
+
+  ctx.strokeStyle='rgba(255,255,255,0.07)'; ctx.lineWidth=1;
+  [0.25,0.5,0.75].forEach(y=>{
+    ctx.beginPath(); ctx.moveTo(0,H*(1-y)); ctx.lineTo(W,H*(1-y)); ctx.stroke();
+  });
+  // 50% reference line
+  ctx.strokeStyle='rgba(255,220,60,0.3)'; ctx.lineWidth=1; ctx.setLineDash([4,4]);
+  ctx.beginPath(); ctx.moveTo(0,H*0.5); ctx.lineTo(W,H*0.5); ctx.stroke();
+  ctx.setLineDash([]);
+
+  const n = data.length;
+  const xStep = W / Math.max(n-1,1);
+  ctx.strokeStyle='#cc88ff'; ctx.lineWidth=2; ctx.beginPath();
+  data.forEach((v,i)=>{
+    const x=i*xStep, y=H*(1-Math.max(0,Math.min(1,v)));
+    i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+
+  const last=data[data.length-1];
+  ctx.fillStyle='#cc88ff'; ctx.beginPath();
+  ctx.arc((n-1)*xStep, H*(1-last), 3, 0, Math.PI*2); ctx.fill();
+}
+
+function retrainML() {
+  if(mlDataset.all.length < 8) return;
+  splitDataset();
+  trainWeights();
+  mlDataset.trainAccuracy = computeAccuracy(mlDataset.trainSet, mlDataset.weights);
+  mlDataset.valAccuracy   = computeAccuracy(mlDataset.valSet,   mlDataset.weights); // NEW
+  mlDataset.testAccuracy  = computeAccuracy(mlDataset.testSet,  mlDataset.weights);
+
+  const trainA = mlDataset.trainAccuracy;
+  const valA   = mlDataset.valAccuracy;
+  const testA  = mlDataset.testAccuracy;
+
+  // ── Bias-variance diagnosis using VALIDATION set (not test) ──────────
+  // OVERFITTING EXAMPLE IN THIS GAME:
+  //   Suppose in rounds 1-5 the bot only saw "pocket Aces always won".
+  //   The model assigns huge weight to handStrength and learns: if hs>0.9 → always raise.
+  //   That works great on training data (Train acc = 88%) but in round 10
+  //   with 6 players and a huge pot, AA gets cracked by a straight.
+  //   The model never learned to account for pot odds or phase → Test acc drops to 54%.
+  //   Gap trainA-valA > 0.18 → we detect overfitting.
+  //   FIX: L2 regularization penalizes extreme weights, epsilon-greedy adds exploration.
+  const gap = trainA - valA; // use VALIDATION to detect, not test
+  if(trainA < 0.55 && valA < 0.55) {
+    mlDataset.biasVarianceState = 'underfitting';
+  } else if(gap > 0.18) {
+    mlDataset.biasVarianceState = 'overfitting';
+  } else {
+    mlDataset.biasVarianceState = 'balanced';
+  }
+
+  updateMLBar();
+
+  // ── Logging de visibilidad del ML (Punto 7 del spec) ────────────────────
+  // Muestra en consola el estado completo del dataset y cuándo empieza a "aprender de verdad"
+  const totalSamples = mlDataset.all.length;
+  const heuristicThreshold = 20; // a partir de aquí los datos reales superan al seed
+  const learningPhase = totalSamples < heuristicThreshold
+    ? `🌱 FASE HEURÍSTICA (${totalSamples}/${heuristicThreshold} muestras reales)`
+    : `🧠 FASE ML REAL (${totalSamples} muestras — aprendizaje activo)`;
+
+  console.log(`[ML RETRAIN] ${learningPhase}`);
+  console.log(`[ML RETRAIN] Dataset total: ${totalSamples} | Train:${mlDataset.trainSet.length} Val:${mlDataset.valSet.length} Test:${mlDataset.testSet.length}`);
+  console.log(`[ML RETRAIN] Train: ${(trainA*100).toFixed(1)}% | Val: ${(valA*100).toFixed(1)}% | Test: ${(testA*100).toFixed(1)}% | Estado: ${mlDataset.biasVarianceState}`);
+
+  // Record history for chart
+  mlHistory.train.push(trainA);
+  mlHistory.val.push(valA);   // NEW
+  mlHistory.test.push(testA);
+  // Track action distribution for new chart
+  const actions = { fold:0, call:0, raise:0 };
+  mlDataset.trainSet.forEach(s => {
+    if(s.action === 0) actions.fold++;
+    else if(s.action === 1) actions.call++;
+    else actions.raise++;
+  });
+  const total = mlDataset.trainSet.length || 1;
+  mlHistory.actionDist.push({
+    fold:  actions.fold  / total,
+    call:  actions.call  / total,
+    raise: actions.raise / total
+  });
+  if(mlHistory.train.length > 20) {
+    mlHistory.train.shift(); mlHistory.val.shift(); mlHistory.test.shift(); mlHistory.actionDist.shift();
+  }
+  drawMLChart();
+  drawActionDistChart(); // NEW
+  updateWeightsDisplay(); // NEW
+}
+// ── NEW: Show learned weights ─────────────────────────────────────────────
+function updateWeightsDisplay() {
+  const el = document.getElementById('mlWeightsDisplay');
+  if(!el) return;
+  const w = mlDataset.weights;
+  const fmt = (v) => (v >= 0 ? '+' : '') + v.toFixed(3);
+  el.innerHTML = [
+    `handStr: <span style="color:${w.handStrength>0?'#44ff88':'#ff8844'}">${fmt(w.handStrength)}</span>`,
+    `potOdds: <span style="color:${w.potOdds>0?'#44ff88':'#ff8844'}">${fmt(w.potOdds)}</span>`,
+    `potSize: <span style="color:${w.potSize>0?'#44ff88':'#ff8844'}">${fmt(w.potSize)}</span>`,
+    `hFold:   <span style="color:${w.humanFoldFreq>0?'#44ff88':'#ff8844'}">${fmt(w.humanFoldFreq)}</span>`,
+    `hRaise:  <span style="color:${w.humanRaiseFreq>0?'#44ff88':'#ff8844'}">${fmt(w.humanRaiseFreq)}</span>`,
+    `phase:   <span style="color:${w.phase>0?'#44ff88':'#ff8844'}">${fmt(w.phase)}</span>`,
+    `bias:    <span style="color:#aaaaff">${fmt(w.bias)}</span>`
+  ].join('<br>');
+}
+const BOT_NAME_POOL = [
+  'Bot Nico','Bot Lara','Bot Rafa','Bot Mia','Bot Omar',
+  'Bot Zara','Bot Ivan','Bot Fede','Bot Cam','Bot Eli',
+  'Bot Hugo','Bot Vera','Bot Kira','Bot Rex','Bot Noa'
+];
+function getBotNamePool() {
+  const used = new Set(players.map(p=>p.name));
+  return BOT_NAME_POOL.filter(n=>!used.has(n));
+}
+
+let phase = 'waiting', actionIndex = 0, dealerIndex = 0;
+let players = [], humanIndex = 0, humanIndices = [0]; // humanIndices for multi-player local mode
+let gameRunning = false;
+// roundChecked[playerIdx] = true when they've acted this betting round without raising
+let roundActed = {};
+let lastRaiser = -1;
+let bettingRoundStart = -1; // actionIndex at which current betting round started
+
+// ============================================================
+// ONLINE / MULTIPLAYER — Firebase Realtime Database
+// Funciona entre dispositivos distintos, distintas redes, Chrome ✓
+// ============================================================
+let gameMode = 'local'; // 'local' | 'host' | 'client'
+let roomId = null;
+let myPlayerId = null;
+let myPlayerName = 'Jugador';
+let isHost = false;
+let onlinePlayerCount = 1;
+let onlinePollInterval = null;
+let bc = null; // kept for compat, unused in Firebase mode
+
+// ============================================================
+// BACKEND RELAY — PeerJS + localStorage cross-tab fallback
+// ============================================================
+// Estrategia multicapa para multijugador sin Firebase:
+//
+// CAPA 1 — PeerJS (WebRTC P2P real):
+//   Funciona entre distintos dispositivos en internet.
+//   El servidor de señalización es peerjs.com (gratuito, sin cuenta).
+//   Una vez conectados, los datos viajan directo entre peers (sin servidor).
+//
+// CAPA 2 — BroadcastChannel (misma pestaña/dispositivo):
+//   Si PeerJS falla (offline, firewall), usamos BroadcastChannel para
+//   comunicar pestañas del mismo navegador. Útil para pruebas locales.
+//
+// CAPA 3 — Sala simulada (cualquier entorno):
+//   Si todo falla, la sala funciona en modo local (vs bots).
+//   Nunca se bloquea.
+// ============================================================
+
+// ── Variables de conexión ─────────────────────────────────────────────────────
+let peer = null;          // PeerJS local peer
+let hostConn = null;      // conexión al host (si soy client)
+let clientConns = [];     // conexiones a clients (si soy host)
+let peerReady = false;
+let fbEventSource = null; // kept for compat
+
+// ── PeerJS loader ─────────────────────────────────────────────────────────────
+function loadPeerJS(callback) {
+  if(window.Peer) { callback(); return; }
+  const s = document.createElement('script');
+  s.src = 'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js';
+  s.onload = () => { console.log('[P2P] PeerJS cargado'); callback(); };
+  s.onerror = () => { console.warn('[P2P] PeerJS no disponible'); callback(true); };
+  document.head.appendChild(s);
+}
+
+// ── Broadcast Channel (fallback mismo dispositivo) ────────────────────────────
+let bcChannel = null;
+function getBroadcastChannel(roomCode) {
+  if(!window.BroadcastChannel) return null;
+  return new BroadcastChannel('poker_room_' + roomCode);
+}
+
+// ── API pública — misma interfaz que Firebase para no cambiar el resto del código ──
+
+// roomStore: almacena el estado de sala en memoria (host lo mantiene)
+let roomStore = {};
+
+async function fbSet(path, data) {
+  // Escribe en roomStore (host) y retransmite a peers
+  const parts = path.split('/');
+  let node = roomStore;
+  for(let i = 0; i < parts.length - 1; i++) {
+    if(!node[parts[i]]) node[parts[i]] = {};
+    node = node[parts[i]];
+  }
+  node[parts[parts.length - 1]] = data;
+
+  // Retransmitir a clients P2P conectados
+  _broadcastToPeers({ type: 'fbSet', path, data });
+  // Retransmitir via BroadcastChannel (mismo dispositivo)
+  if(bcChannel) bcChannel.postMessage({ type: 'fbSet', path, data });
+
+  return true; // nunca falla — es local
+}
+
+async function fbPatch(path, data) {
+  // Merge en roomStore
+  const parts = path.split('/');
+  let node = roomStore;
+  for(let i = 0; i < parts.length - 1; i++) {
+    if(!node[parts[i]]) node[parts[i]] = {};
+    node = node[parts[i]];
+  }
+  const key = parts[parts.length - 1];
+  node[key] = Object.assign({}, node[key] || {}, data);
+
+  _broadcastToPeers({ type: 'fbPatch', path, data });
+  if(bcChannel) bcChannel.postMessage({ type: 'fbPatch', path, data });
+
+  return true;
+}
+
+async function fbGet(path) {
+  // Lee de roomStore — si soy client, pido al host via P2P
+  if(gameMode === 'client') {
+    return await _requestFromHost('fbGet', path);
+  }
+  const parts = path.split('/');
+  let node = roomStore;
+  for(const p of parts) {
+    if(node == null || typeof node !== 'object') return null;
+    node = node[p];
+  }
+  return node !== undefined ? node : null;
+}
+
+async function fbDelete(path) {
+  const parts = path.split('/');
+  let node = roomStore;
+  for(let i = 0; i < parts.length - 1; i++) {
+    if(!node[parts[i]]) return;
+    node = node[parts[i]];
+  }
+  delete node[parts[parts.length - 1]];
+  _broadcastToPeers({ type: 'fbDelete', path });
+  if(bcChannel) bcChannel.postMessage({ type: 'fbDelete', path });
+}
+
+// ── Listeners (reemplaza SSE de Firebase) ────────────────────────────────────
+let fbListeners = {}; // path → callback
+function fbListen(path, callback) {
+  fbListeners[path] = callback;
+  // Si soy host, la primera llamada puede traer datos existentes
+  const current = _getFromStore(path);
+  if(current) setTimeout(() => callback(current), 0);
+}
+function stopFbListen() {
+  fbListeners = {};
+  if(onlinePollInterval) { clearInterval(onlinePollInterval); onlinePollInterval = null; }
+  if(fbEventSource) { fbEventSource.close(); fbEventSource = null; }
+}
+
+function _getFromStore(path) {
+  const parts = path.split('/');
+  let node = roomStore;
+  for(const p of parts) {
+    if(node == null || typeof node !== 'object') return null;
+    node = node[p];
+  }
+  return node !== undefined ? node : null;
+}
+
+// ── Notificar listeners cuando cambia un path ─────────────────────────────────
+function _notifyListeners(path) {
+  for(const [listenPath, cb] of Object.entries(fbListeners)) {
+    if(path.startsWith(listenPath) || listenPath.startsWith(path)) {
+      const val = _getFromStore(listenPath);
+      if(val !== null) cb(val);
+    }
+  }
+}
+
+// ── Aplicar mensaje entrante (fbSet/fbPatch/fbDelete) ─────────────────────────
+function _applyMessage(msg) {
+  if(!msg || !msg.type) return;
+  if(msg.type === 'fbSet') {
+    const parts = msg.path.split('/');
+    let node = roomStore;
+    for(let i = 0; i < parts.length - 1; i++) {
+      if(!node[parts[i]]) node[parts[i]] = {};
+      node = node[parts[i]];
+    }
+    node[parts[parts.length - 1]] = msg.data;
+    _notifyListeners(msg.path);
+  } else if(msg.type === 'fbPatch') {
+    const parts = msg.path.split('/');
+    let node = roomStore;
+    for(let i = 0; i < parts.length - 1; i++) {
+      if(!node[parts[i]]) node[parts[i]] = {};
+      node = node[parts[i]];
+    }
+    const key = parts[parts.length - 1];
+    node[key] = Object.assign({}, node[key] || {}, msg.data);
+    _notifyListeners(msg.path);
+  } else if(msg.type === 'fbDelete') {
+    const parts = msg.path.split('/');
+    let node = roomStore;
+    for(let i = 0; i < parts.length - 1; i++) {
+      if(!node[parts[i]]) return;
+      node = node[parts[i]];
+    }
+    delete node[parts[parts.length - 1]];
+    _notifyListeners(msg.path);
+  } else if(msg.type === 'fbGetResponse') {
+    // Respuesta a un fbGet solicitado por client
+    if(msg._resolve) msg._resolve(msg.data);
+  }
+}
+
+// ── Broadcast a todos los clients P2P ────────────────────────────────────────
+function _broadcastToPeers(msg) {
+  clientConns.forEach(conn => {
+    try { conn.send(msg); } catch(e) {}
+  });
+}
+
+// ── Request sincrono al host (client pide datos) ─────────────────────────────
+const _pendingRequests = {};
+async function _requestFromHost(type, path) {
+  if(!hostConn || !hostConn.open) {
+    // Sin conexión P2P → leer de roomStore local (puede estar desactualizado)
+    return _getFromStore(path);
+  }
+  return new Promise((resolve) => {
+    const reqId = Date.now() + Math.random();
+    _pendingRequests[reqId] = resolve;
+    try { hostConn.send({ type, path, reqId }); } catch(e) { resolve(null); }
+    setTimeout(() => { if(_pendingRequests[reqId]) { delete _pendingRequests[reqId]; resolve(null); }}, 3000);
+  });
+}
+
+// ── Setup PeerJS como HOST ────────────────────────────────────────────────────
+function setupPeerHost(roomCode, onReady) {
+  loadPeerJS((err) => {
+    if(err || !window.Peer) {
+      console.warn('[P2P] PeerJS no disponible, usando modo local');
+      onReady(false); return;
+    }
+    try {
+      // El host usa el código de sala como peer ID (con prefijo para evitar colisiones)
+      peer = new Peer('poker-host-' + roomCode, {
+        debug: 0,
+        config: { iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]}
+      });
+      peer.on('open', (id) => {
+        console.log('[P2P] Host P2P listo. ID:', id);
+        peerReady = true;
+        onReady(true);
+      });
+      peer.on('connection', (conn) => {
+        console.log('[P2P] Cliente conectado:', conn.peer);
+        clientConns.push(conn);
+        conn.on('data', (msg) => {
+          // Client solicita datos
+          if(msg.type === 'fbGet') {
+            const data = _getFromStore(msg.path);
+            conn.send({ type: 'fbGetResponse', data, reqId: msg.reqId });
+          } else {
+            _applyMessage(msg); // client envía acciones
+          }
+        });
+        conn.on('close', () => {
+          clientConns = clientConns.filter(c => c !== conn);
+        });
+      });
+      peer.on('error', (e) => {
+        console.warn('[P2P] Error PeerJS host:', e.type);
+        if(!peerReady) onReady(false);
+      });
+      // Timeout por si PeerJS tarda demasiado
+      setTimeout(() => { if(!peerReady) { console.warn('[P2P] Timeout PeerJS'); onReady(false); }}, 5000);
+    } catch(e) {
+      console.warn('[P2P] Excepción PeerJS:', e); onReady(false);
+    }
+  });
+}
+
+// ── Setup PeerJS como CLIENT ──────────────────────────────────────────────────
+function setupPeerClient(roomCode, onReady) {
+  loadPeerJS((err) => {
+    if(err || !window.Peer) { onReady(false); return; }
+    try {
+      peer = new Peer({ debug: 0 });
+      peer.on('open', () => {
+        const hostId = 'poker-host-' + roomCode;
+        hostConn = peer.connect(hostId, { reliable: true });
+        hostConn.on('open', () => {
+          console.log('[P2P] Conectado al host:', hostId);
+          onReady(true);
+        });
+        hostConn.on('data', (msg) => {
+          if(msg.type === 'fbGetResponse' && _pendingRequests[msg.reqId]) {
+            _pendingRequests[msg.reqId](msg.data);
+            delete _pendingRequests[msg.reqId];
+          } else {
+            _applyMessage(msg);
+          }
+        });
+        hostConn.on('close', () => { console.warn('[P2P] Desconectado del host'); });
+        hostConn.on('error', (e) => { console.warn('[P2P] Error conexión host:', e); onReady(false); });
+      });
+      peer.on('error', (e) => { console.warn('[P2P] Error PeerJS client:', e.type); onReady(false); });
+      setTimeout(() => { if(!hostConn || !hostConn.open) onReady(false); }, 6000);
+    } catch(e) { console.warn('[P2P] Excepción PeerJS client:', e); onReady(false); }
+  });
+}
+
+// Dummy FB_URL kept so error messages compile
+const FB_URL = '(P2P local — sin Firebase)';
+
+function generateRoomId() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let id = '';
+  for(let i = 0; i < 6; i++) id += chars[Math.floor(Math.random() * chars.length)];
+  return id;
+}
+
+// ── Lobby broadcast helpers (compat wrappers) ──
+async function writeRoomState(data) {
+  if(!roomId) return;
+  await fbPatch(`rooms/${roomId}`, { ...data, _ts: Date.now() });
+}
+async function writeAction(action) {
+  if(!roomId) return;
+  await fbSet(`rooms/${roomId}/action`, { ...action, _ts: Date.now() });
+}
+async function broadcastGameState() {
+  if(gameMode !== 'host' || !roomId) return;
+  const state = buildGameStateSnapshot();
+  await fbSet(`rooms/${roomId}/gameState`, state);
+}
+
+// ============================================================
+// LOBBY LOGIC
+// ============================================================
+let selectedMode = 'local';
+
+// Check URL for room code
+(function checkURL() {
+  // Soporta AMBOS formatos de link:
+  //   ?room=ABC123  (query string — funciona en cualquier servidor)
+  //   #room=ABC123  (hash — funciona en file:// también)
+  let code = null;
+
+  // Prioridad 1: query string ?room=
+  const params = new URLSearchParams(window.location.search);
+  const qroom = params.get('room');
+  if(qroom && qroom.length === 6) code = qroom.toUpperCase();
+
+  // Prioridad 2: hash #room=
+  if(!code) {
+    const hash = window.location.hash;
+    if(hash && hash.startsWith('#room=')) {
+      const hcode = hash.slice(6).toUpperCase();
+      if(hcode.length === 6) code = hcode;
+    }
+  }
+
+  if(code) {
+    console.log('[URL] Código de sala detectado en URL:', code);
+    setTimeout(() => {
+      selectMode('join');
+      const input = document.getElementById('roomCodeInput');
+      if(input) input.value = code;
+      // Auto-focus en el campo de nombre si está vacío
+      const nameInput = document.getElementById('playerNameInput');
+      if(nameInput && !nameInput.value.trim()) nameInput.focus();
+    }, 150);
+  }
+})();
+
+function selectMode(mode) {
+  selectedMode = mode;
+  ['local','multi','create','join'].forEach(m => {
+    const btn = document.getElementById('mode' + m.charAt(0).toUpperCase() + m.slice(1));
+    if(btn) btn.classList.toggle('active', m === mode);
+  });
+  document.getElementById('joinCodeField').style.display = mode === 'join' ? 'block' : 'none';
+  document.getElementById('multiPlayerFields').style.display = mode === 'multi' ? 'block' : 'none';
+  document.getElementById('roomInfo').style.display = 'none';
+  document.getElementById('waitingMsg').style.display = 'none';
+  const startBtn = document.getElementById('lobbyStartBtn');
+  startBtn.textContent = mode === 'create' ? 'Crear Sala' : mode === 'join' ? 'Unirse' : mode === 'multi' ? 'Jugar Local Multi' : 'Jugar';
+  startBtn.onclick = lobbyStart;
+}
+
+let extraPlayerCount = 0;
+function addExtraPlayer() {
+  if(extraPlayerCount >= 3) return; // max 4 humans total (1 main + 3 extra)
+  extraPlayerCount++;
+  const container = document.getElementById('extraPlayersContainer');
+  const idx = extraPlayerCount;
+  const div = document.createElement('div');
+  div.id = 'extraPlayer_' + idx;
+  div.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px;';
+  div.innerHTML = `
+    <input type="text" placeholder="Jugador ${idx+1}" maxlength="14" id="extraName_${idx}"
+      style="flex:1;background:#111;border:1px solid #555;color:#fff;border-radius:7px;
+             padding:8px 12px;font-size:14px;outline:none;">
+    <button onclick="removeExtraPlayer(${idx})" style="background:#3a1010;border:1px solid #aa3333;
+      color:#ff8888;border-radius:6px;padding:6px 10px;cursor:pointer;font-size:12px;">✕</button>
+  `;
+  container.appendChild(div);
+}
+function removeExtraPlayer(idx) {
+  const el = document.getElementById('extraPlayer_' + idx);
+  if(el) el.remove();
+  extraPlayerCount = Math.max(0, extraPlayerCount - 1);
+}
+
+function lobbyStart() {
+  const name = document.getElementById('playerNameInput').value.trim() || 'Jugador';
+  myPlayerName = name;
+
+  if(selectedMode === 'local') {
+    startLocalGame(name);
+  } else if(selectedMode === 'multi') {
+    // Collect extra player names
+    const extraNames = [];
+    for(let i = 1; i <= 3; i++) {
+      const el = document.getElementById('extraName_' + i);
+      if(el && el.offsetParent !== null) { // visible
+        const n = el.value.trim();
+        if(n) extraNames.push(n);
+      }
+    }
+    startLocalMultiGame(name, extraNames);
+  } else if(selectedMode === 'create') {
+    createOnlineRoom(name);
+  } else if(selectedMode === 'join') {
+    const code = document.getElementById('roomCodeInput').value.trim().toUpperCase();
+    if(code.length !== 6) { alert('Ingresá un código de sala válido (6 caracteres)'); return; }
+    joinOnlineRoom(name, code);
+  }
+}
+
+function startLocalGame(name) {
+  gameMode = 'local';
+  document.getElementById('lobbyOverlay').style.display = 'none';
+  roundsPlayed = 0; // reset session rounds
+  initPlayers(name);
+  buildPlayers();
+  createStartButton();
+  document.getElementById('mlLevelSpan').textContent = mlLevel;
+  document.getElementById('roundsSpan').textContent = roundsPlayed;
+  updateBankUI();
+}
+
+function startLocalMultiGame(name, extraNames) {
+  gameMode = 'local';
+  document.getElementById('lobbyOverlay').style.display = 'none';
+  roundsPlayed = 0;
+  initPlayersMulti([name, ...extraNames]);
+  buildPlayers();
+  createStartButton();
+  document.getElementById('mlLevelSpan').textContent = mlLevel;
+  document.getElementById('roundsSpan').textContent = roundsPlayed;
+  updateBankUI();
+  setMsg(`👥 Modo multijugador local — ${name} y ${extraNames.length} jugadores más`);
+}
+
+
+
+function buildInviteUrl() {
+  // Genera el link más compatible posible:
+  // - Si hay un servidor (http/https): usa ?room= en la URL real
+  // - Si corre como file://: usa #room= (único formato que funciona sin servidor)
+  if(!roomId) return window.location.href;
+  const isFile = window.location.protocol === 'file:';
+  if(isFile) {
+    // file:// no soporta query strings bien — usar hash
+    return window.location.href.split('#')[0] + '#room=' + roomId;
+  } else {
+    // http/https — usar query string (más limpio, más compatible)
+    const base = window.location.origin + window.location.pathname;
+    return base + '?room=' + roomId;
+  }
+}
+
+async function createOnlineRoom(name) {
+  roomId = generateRoomId();
+  isHost = true;
+  myPlayerId = 0;
+  gameMode = 'host';
+
+  setOnlineStatus('connecting');
+  document.getElementById('waitingMsg').style.display = 'block';
+  document.getElementById('waitingMsg').textContent = '⏳ Iniciando sala P2P...';
+
+  console.log('[Crear Sala] Iniciando con sistema P2P. Código:', roomId);
+  console.log('[Crear Sala] navigator.onLine =', navigator.onLine, '(informativo)');
+
+  // Inicializar roomStore con datos de sala
+  const roomData = {
+    host: name,
+    players: [{ id: 0, name, ready: true }],
+    started: false,
+    gameState: null,
+    action: null,
+    _ts: Date.now()
+  };
+  await fbSet('rooms/' + roomId, roomData); // escribe en roomStore local (siempre OK)
+
+  // Configurar BroadcastChannel para jugadores en el mismo dispositivo
+  bcChannel = getBroadcastChannel(roomId);
+  if(bcChannel) {
+    bcChannel.onmessage = (e) => { _applyMessage(e.data); };
+    console.log('[Crear Sala] BroadcastChannel activo para sala', roomId);
+  }
+
+  // Intentar P2P via PeerJS (para jugadores en distintos dispositivos)
+  document.getElementById('waitingMsg').textContent = '⏳ Configurando conexión P2P...';
+  setupPeerHost(roomId, (p2pOk) => {
+    if(p2pOk) {
+      console.log('[Crear Sala] ✅ P2P activo — otros dispositivos pueden unirse con el código');
+      setOnlineStatus('connected', `Sala ${roomId} — P2P activo`);
+    } else {
+      console.warn('[Crear Sala] P2P no disponible. La sala funciona en este dispositivo (modo local).');
+      setOnlineStatus('connected', `Sala ${roomId} — local`);
+    }
+  });
+
+  // Mostrar UI de sala (siempre, independientemente del P2P)
+  // Actualizar URL con el código de sala (soporta ambos formatos)
+  if(window.location.protocol === 'file:') {
+    window.location.hash = 'room=' + roomId; // file:// solo soporta hash
+  } else {
+    const newUrl = window.location.origin + window.location.pathname + '?room=' + roomId;
+    window.history.replaceState({}, '', newUrl);
+  }
+  console.log('[Crear Sala] URL actualizada. Código:', roomId, '| Link:', buildInviteUrl());
+  document.getElementById('roomCodeDisplay').textContent = roomId;
+  document.getElementById('roomInfo').style.display = 'block';
+  document.getElementById('waitingMsg').style.display = 'block';
+  document.getElementById('waitingMsg').textContent = '⏳ Esperando jugadores...';
+  document.getElementById('lobbyStartBtn').textContent = 'Iniciar Partida';
+  document.getElementById('lobbyStartBtn').onclick = startHostGame;
+  updateRoomPlayersList([{ name }]);
+
+  // Mostrar link de invitación en la UI
+  const linkEl = document.getElementById('roomLinkDisplay');
+  if(linkEl) {
+    const inviteUrl = buildInviteUrl();
+    linkEl.textContent = '🔗 ' + inviteUrl;
+    console.log('[Crear Sala] Room ID:', roomId);
+    console.log('[Crear Sala] Link de invitación:', inviteUrl);
+    console.log('[Crear Sala] Entrando a sala:', roomId);
+  }
+
+  // Escuchar cambios en la lista de jugadores
+  fbListen('rooms/' + roomId + '/players', (playersData) => {
+    if(!playersData) return;
+    const pls = Array.isArray(playersData) ? playersData : Object.values(playersData);
+    updateRoomPlayersList(pls);
+    const cnt = document.getElementById('waitingCount');
+    if(cnt) cnt.textContent = pls.length;
+    onlinePlayerCount = pls.length;
+    setOnlineStatus('connected', `Sala ${roomId} — ${pls.length} jugador(es)`);
+  });
+}
+
+async function joinOnlineRoom(name, code) {
+  setOnlineStatus('connecting');
+  document.getElementById('waitingMsg').style.display = 'block';
+  document.getElementById('waitingMsg').textContent = '⏳ Conectando a sala ' + code + '...';
+  console.log('[Unirse] Intentando conectar a sala:', code);
+
+  roomId = code;
+  isHost = false;
+  gameMode = 'client';
+
+  // Configurar BroadcastChannel (mismo dispositivo)
+  bcChannel = getBroadcastChannel(roomId);
+  if(bcChannel) {
+    bcChannel.onmessage = (e) => { _applyMessage(e.data); };
+  }
+
+  // Intentar conectar via P2P al host
+  let joined = false;
+  await new Promise(resolve => {
+    setupPeerClient(roomId, (ok) => {
+      if(ok) {
+        console.log('[Unirse] ✅ Conectado P2P al host');
+        joined = true;
+      } else {
+        console.warn('[Unirse] P2P no disponible');
+      }
+      resolve();
+    });
+  });
+
+  // Intentar obtener datos de sala del host
+  const roomData = await fbGet('rooms/' + code);
+  if(!roomData && !joined) {
+    // No hay P2P ni datos — el host puede estar en el mismo dispositivo (BC)
+    // Esperar un momento por si llegan datos via BroadcastChannel
+    await new Promise(r => setTimeout(r, 1000));
+    const retry = await fbGet('rooms/' + code);
+    if(!retry) {
+      document.getElementById('waitingMsg').innerHTML =
+        '<b>❌ No se encontró la sala ' + code + '</b><br>' +
+        '<small style="color:#aaa">Verificá que el host esté en la misma red o dispositivo.<br>' +
+        'Para jugar entre dispositivos distintos se necesita P2P (puede requerir internet).</small>';
+      setOnlineStatus('disconnected'); return;
+    }
+  }
+
+  const finalData = roomData || await fbGet('rooms/' + code) || {};
+  if(finalData.started) {
+    document.getElementById('waitingMsg').textContent = '❌ La partida ya comenzó.';
+    setOnlineStatus('disconnected'); return;
+  }
+
+  // Registrarse en la sala
+  const existing = finalData.players
+    ? (Array.isArray(finalData.players) ? finalData.players : Object.values(finalData.players))
+    : [];
+  myPlayerId = existing.length;
+  const updated = [...existing, { id: myPlayerId, name, ready: true }];
+  await fbSet('rooms/' + roomId + '/players', updated);
+
+  // Actualizar URL con el código de sala (soporta ambos formatos)
+  if(window.location.protocol === 'file:') {
+    window.location.hash = 'room=' + roomId; // file:// solo soporta hash
+  } else {
+    const newUrl = window.location.origin + window.location.pathname + '?room=' + roomId;
+    window.history.replaceState({}, '', newUrl);
+  }
+  console.log('[Crear Sala] URL actualizada. Código:', roomId, '| Link:', buildInviteUrl());
+  document.getElementById('roomCodeDisplay').textContent = roomId;
+  document.getElementById('roomInfo').style.display = 'block';
+  document.getElementById('waitingMsg').style.display = 'block';
+  document.getElementById('waitingMsg').textContent = '✅ Unido a sala ' + roomId + '! Esperando que el host inicie...';
+  document.getElementById('lobbyStartBtn').style.display = 'none';
+  updateRoomPlayersList(updated);
+  setOnlineStatus('connected', `Sala ${roomId} — Jugador ${myPlayerId + 1}`);
+
+  fbListen('rooms/' + roomId, (data) => {
+    if(!data) return;
+    if(data.players) {
+      const pls = Array.isArray(data.players) ? data.players : Object.values(data.players);
+      updateRoomPlayersList(pls);
+    }
+    if(data.started && data.gameState) {
+      stopFbListen();
+      startClientGame(data);
+    }
+  });
+}
+
+async function startHostGame() {
+  stopFbListen();
+  const roomData = await fbGet(`rooms/${roomId}`);
+  const allPlayers = roomData && roomData.players
+    ? (Array.isArray(roomData.players) ? roomData.players : Object.values(roomData.players))
+    : [{ id: 0, name: myPlayerName }];
+  const humanNames = allPlayers.map(p => p.name);
+
+  document.getElementById('lobbyOverlay').style.display = 'none';
+  setOnlineStatus('connected', `Sala: ${roomId} | ${allPlayers.length} jugadores`);
+  initPlayersOnline(humanNames, myPlayerId);
+  buildPlayers();
+  updateBankUI();
+
+  await fbPatch(`rooms/${roomId}`, { started: true, _ts: Date.now() });
+  startOnlineHostLoop();
+  createStartButton();
+}
+
+function startClientGame(roomState) {
+  stopFbListen();
+  document.getElementById('lobbyOverlay').style.display = 'none';
+  setOnlineStatus('connected', `Sala: ${roomId} | Jugador ${myPlayerId + 1}`);
+
+  const allPlayers = roomState.players
+    ? (Array.isArray(roomState.players) ? roomState.players : Object.values(roomState.players))
+    : [];
+  initPlayersOnline(allPlayers.map(p => p.name), myPlayerId);
+  buildPlayers();
+  updateBankUI();
+  startOnlineClientLoop();
+}
+
+function hostPollPlayers() {} // replaced by fbListen
+
+function updateRoomPlayersList(pls) {
+  const el = document.getElementById('roomPlayersList');
+  if(!el) return;
+  el.innerHTML = (pls||[]).map((p, i) =>
+    `<span style="color:${i===0?'#d4a017':'#aaa'}">${i===0?'👑 ':'👤 '}${p.name||'?'}</span>`
+  ).join(' &nbsp; ');
+}
+
+let lastActionTs = 0;
+function startOnlineHostLoop() {
+  fbListen(`rooms/${roomId}/action`, (act) => {
+    if(!act || !act._ts || act._ts <= lastActionTs) return;
+    lastActionTs = act._ts;
+    if(act.playerId !== undefined && actionIndex === act.playerId && gameRunning) {
+      executeAction(players[act.playerId], act.action, act.raiseAmount || 0);
+    }
+  });
+}
+
+function startOnlineClientLoop() {
+  let lastStateTs = 0;
+  fbListen(`rooms/${roomId}/gameState`, (state) => {
+    if(!state || !state._ts || state._ts <= lastStateTs) return;
+    lastStateTs = state._ts;
+    applyStateUpdate(state);
+  });
+}
+
+function broadcastGameState() {
+  if(gameMode !== 'host') return;
+  const state = buildGameStateSnapshot();
+  fbSet(`rooms/${roomId}/gameState`, state);
+}
+
+function buildGameStateSnapshot() {
+  return {
+    _ts: Date.now(), phase, pot, currentBet, communityCards, actionIndex, gameRunning,
+    players: players.map((p, i) => ({
+      name: p.name, chips: p.chips, bet: p.bet, folded: p.folded,
+      hand: (i === myPlayerId || phase === 'showdown') ? p.hand : (p.hand||[]).map(() => null)
+    }))
+  };
+}
+
+function applyStateUpdate(state) {
+  if(!state) return;
+  phase = state.phase; pot = state.pot; currentBet = state.currentBet;
+  communityCards = state.communityCards || [];
+  actionIndex = state.actionIndex; gameRunning = state.gameRunning;
+
+  (state.players||[]).forEach((sp, i) => {
+    if(!players[i]) return;
+    players[i].chips = sp.chips; players[i].bet = sp.bet; players[i].folded = sp.folded;
+    if(sp.hand && sp.hand.every(c => c !== null)) players[i].hand = sp.hand;
+  });
+
+  updateUI(); updateCommunityCards();
+  setPhaseLabel(PHASE_LABELS[phase] || phase);
+  updateBankUI();
+
+  if(gameRunning && actionIndex === myPlayerId) {
+    showActionPanel();
+  } else {
+    hideActionPanel();
+    if(actionIndex >= 0 && actionIndex < players.length)
+      setMsg(`Turno de ${players[actionIndex].name}...`);
+  }
+}
+
+function sendOnlineAction(action, raiseAmount) {
+  if(!roomId) return;
+  writeAction({ playerId: myPlayerId, action, raiseAmount, _ts: Date.now() });
+}
+
+function setOnlineStatus(status, text) {
+  const bar = document.getElementById('onlineBar');
+  const dot = document.getElementById('onlineDot');
+  const label = document.getElementById('onlineStatus');
+  if(!bar) return;
+  if(status === 'connected') {
+    bar.style.display = 'block';
+    dot.className = 'online-dot connected';
+    if(label) label.textContent = text || 'Conectado';
+  } else if(status === 'connecting') {
+    bar.style.display = 'block';
+    dot.className = 'online-dot';
+    dot.style.background = '#ffaa00'; dot.style.boxShadow = '0 0 6px #ffaa00';
+    if(label) label.textContent = 'Conectando...';
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+
+function copyInviteLink() {
+  if(!roomId) return;
+  const url = buildInviteUrl();
+  console.log('[Invitación] Link generado:', url);
+  console.log('[Invitación] Room ID:', roomId);
+
+  // Siempre mostrar el modal con el link visible — independientemente del clipboard
+  showLinkModal(url);
+
+  // Además intentar copiar automáticamente
+  if(navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url)
+      .then(() => { console.log('[Invitación] ✅ Copiado al portapapeles automáticamente'); })
+      .catch(() => { /* el modal ya lo muestra, no es crítico */ });
+  } else {
+    // execCommand fallback (file://, HTTP sin HTTPS)
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = url; ta.style.cssText = 'position:fixed;opacity:0;';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      console.log('[Invitación] ✅ Copiado via execCommand');
+    } catch(e) { /* el modal lo muestra de todas formas */ }
+  }
+}
+
+function fallbackCopy(url) {
+  // Method 2: execCommand (works in HTTP / local files)
+  const ta = document.createElement('textarea');
+  ta.value = url;
+  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none;';
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  try {
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    if(ok) { setMsg('¡Link copiado!'); showCopiedFeedback(); return; }
+  } catch(e) {}
+  document.body.removeChild(ta);
+
+  // Method 3: show modal with the link so user can copy manually
+  showLinkModal(url);
+}
+
+function showCopiedFeedback() {
+  const btns = document.querySelectorAll('.copy-link-btn, .copy-btn');
+  btns.forEach(b => {
+    const orig = b.textContent;
+    b.textContent = '✅ Copiado!';
+    setTimeout(() => b.textContent = orig, 2000);
+  });
+}
+
+function showLinkModal(url) {
+  const old = document.getElementById('linkModal');
+  if(old) old.remove();
+
+  const isFile = window.location.protocol === 'file:';
+  const modeNote = isFile
+    ? '⚠️ Estás en modo <b>archivo local</b> (file://). Para multijugador entre dispositivos distintos, subí el archivo a un servidor web o usá un servicio como <a href="https://itch.io" target="_blank" style="color:#4a9eff">itch.io</a>.'
+    : '✅ Link listo para compartir. Quien lo abra entrará directo a tu sala.';
+
+  const modal = document.createElement('div');
+  modal.id = 'linkModal';
+  modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.88);z-index:500;display:flex;align-items:center;justify-content:center;';
+  modal.innerHTML = `
+    <div style="background:linear-gradient(160deg,#1a1200,#0e0900);border:2px solid #d4a017;
+      border-radius:16px;padding:30px 32px;max-width:460px;width:92%;text-align:center;
+      box-shadow:0 0 60px rgba(212,160,23,0.2);">
+      <div style="color:#ffd060;font-size:18px;font-weight:bold;margin-bottom:6px;font-family:'Playfair Display',serif;">
+        🔗 Link de Invitación
+      </div>
+      <div style="color:#888;font-size:12px;margin-bottom:4px;">Código de sala: <b style="color:#d4a017;letter-spacing:3px;">${roomId}</b></div>
+      <div style="color:#777;font-size:11px;margin-bottom:14px;">${modeNote}</div>
+
+      <div style="position:relative;margin-bottom:14px;">
+        <input id="linkModalInput" type="text" value="${url}" readonly
+          style="width:100%;background:#0a0800;border:1px solid #d4a017;color:#ffe07a;
+            border-radius:8px;padding:11px 44px 11px 12px;font-size:11px;
+            outline:none;letter-spacing:0.3px;font-family:monospace;"
+          onclick="this.select();">
+        <button onclick="
+          const inp = document.getElementById('linkModalInput');
+          inp.select();
+          if(navigator.clipboard){navigator.clipboard.writeText(inp.value).catch(()=>{})}
+          else{try{document.execCommand('copy')}catch(e){}}
+          this.textContent='✅';setTimeout(()=>this.textContent='📋',1500);
+        " style="position:absolute;right:6px;top:50%;transform:translateY(-50%);
+          background:#2d1a00;border:1px solid #d4a017;color:#ffd060;border-radius:5px;
+          padding:4px 8px;cursor:pointer;font-size:14px;">📋</button>
+      </div>
+
+      <div style="font-size:11px;color:#666;margin-bottom:16px;">
+        💡 <b>¿Cómo funciona?</b><br>
+        El receptor abre el link → entra al lobby → hace click en <i>"Unirse"</i> con el código <b style="color:#d4a017">${roomId}</b>
+      </div>
+
+      <div style="display:flex;gap:8px;justify-content:center;">
+        <button onclick="
+          const inp = document.getElementById('linkModalInput');
+          inp.select();
+          if(navigator.clipboard){navigator.clipboard.writeText(inp.value).then(()=>{this.textContent='✅ Copiado!';setTimeout(()=>this.textContent='📋 Copiar Link',2000)}).catch(()=>{})}
+          else{try{document.execCommand('copy');this.textContent='✅ Copiado!';setTimeout(()=>this.textContent='📋 Copiar Link',2000)}catch(e){}}
+        " style="flex:1;background:linear-gradient(135deg,#d4a017,#8a6000);border:none;
+          border-radius:8px;color:#000;padding:10px 18px;font-size:13px;font-weight:bold;
+          cursor:pointer;font-family:'Rajdhani',sans-serif;">📋 Copiar Link</button>
+        <button onclick="document.getElementById('linkModal').remove();"
+          style="background:#1a1200;border:1px solid #555;border-radius:8px;color:#aaa;
+          padding:10px 18px;font-size:13px;cursor:pointer;font-family:'Rajdhani',sans-serif;">
+          Cerrar
+        </button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  // Auto-select the input
+  setTimeout(() => { const inp = document.getElementById('linkModalInput'); if(inp) inp.select(); }, 100);
+}
+
+// ============================================================
+// THREE.JS SETUP
+// ============================================================
+let scene, camera, renderer, tableGroup;
+let playerMeshes = [], chipMeshes = [], cardMeshes = [];
+
+function initThree() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x020102);
+  scene.fog = new THREE.FogExp2(0x020102, 0.038);
+
+  camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 120);
+  camera.position.set(0, 16, 14);
+  camera.lookAt(0, 0, 0);
+
+  // ⚡ OPTIMIZACIÓN: antialias=false en móviles/bajo rendimiento, pixelRatio limitado a 1.5
+  const isLowEnd = navigator.hardwareConcurrency <= 4 || window.innerWidth < 768;
+  renderer = new THREE.WebGLRenderer({
+    canvas: document.getElementById('gameCanvas'),
+    antialias: !isLowEnd,  // sin antialiasing en dispositivos lentos
+    powerPreference: 'high-performance'
+  });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  // ⚡ OPTIMIZACIÓN: sombras desactivadas por defecto → mayor rendimiento
+  renderer.shadowMap.enabled = false;  // era: true con PCFSoft → costoso
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // era: 2 → ahorra ~25% GPU
+  renderer.toneMapping = THREE.LinearToneMapping; // era: ACESFilmic → más liviano
+  renderer.toneMappingExposure = 1.0;
+
+  // ── LIGHTING — simplificado para mejor rendimiento ─────────────
+  // ⚡ OPTIMIZACIÓN: reducidas de 9 luces a 4 → mayor ahorro de GPU
+  scene.add(new THREE.AmbientLight(0x1a0d08, 1.4)); // más ambiente compensa pérdida de luces dinámicas
+
+  // ⚡ PRIMARY spot — sin sombras (castShadow=false es el cambio más impactante en perf.)
+  const mainSpot = new THREE.SpotLight(0xfff2cc, 3.5, 40, Math.PI/6, 0.35, 1.5);
+  mainSpot.position.set(0, 20, 0);
+  mainSpot.target.position.set(0, 0, 0);
+  mainSpot.castShadow = false; // ← era true con mapSize 2048 → enorme coste GPU
+  scene.add(mainSpot); scene.add(mainSpot.target);
+
+  // Fill + rim — reemplazan 5 luces anteriores con 2 simples PointLights
+  const fillLight = new THREE.PointLight(0xff9944, 1.5, 28);
+  fillLight.position.set(-8, 10, 6);
+  scene.add(fillLight);
+
+  const rimLight = new THREE.PointLight(0x2244aa, 1.5, 25);
+  rimLight.position.set(8, 10, -8);
+  scene.add(rimLight);
+
+  // Store for animate loop — animación mínima solo en rimLight
+  scene.userData.animLights = { rimLight };
+
+  buildTable();
+  animate();
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+}
+
+function buildTable() {
+  tableGroup = new THREE.Group();
+
+  // ── MAIN FELT — premium casino green with MeshPhongMaterial for specular ──
+  // ⚡ Segmentos reducidos: 96→48 en mesa, 96→48 en rail. Visual idéntico a esta distancia
+  const tableGeo = new THREE.CylinderGeometry(7.4, 7.4, 0.28, 48);
+  tableGeo.scale(1, 1, 0.60);
+  const tableMat = new THREE.MeshPhongMaterial({
+    color: 0x0c5520, specular: 0x052208, shininess: 12
+  });
+  const tableMesh = new THREE.Mesh(tableGeo, tableMat);
+  tableMesh.receiveShadow = false; // ⚡ sombras desactivadas en renderer
+  tableGroup.add(tableMesh);
+
+  // Inner felt — slightly darker, creates depth
+  const innerGeo = new THREE.CylinderGeometry(6.6, 6.6, 0.29, 48);
+  innerGeo.scale(1, 1, 0.60);
+  const innerMat = new THREE.MeshPhongMaterial({ color: 0x094a1a, specular: 0x030d06, shininess: 8 });
+  const innerFelt = new THREE.Mesh(innerGeo, innerMat);
+  innerFelt.position.y = 0.004;
+  tableGroup.add(innerFelt);
+
+  // Felt decorative stitching ring
+  for(let r of [4.5, 5.8]) {
+    const stitchGeo = new THREE.TorusGeometry(r, 0.02, 4, 40); // ⚡ 6,80→4,40
+    stitchGeo.scale(1, 0.15, 0.60);
+    const stitchMat = new THREE.MeshLambertMaterial({ color: 0x0a4016 });
+    const stitch = new THREE.Mesh(stitchGeo, stitchMat);
+    stitch.position.y = 0.148;
+    tableGroup.add(stitch);
+  }
+
+  // ── PADDED RAIL — dark leather with gold piping ───────────────
+  const railGeo = new THREE.TorusGeometry(7.4, 0.60, 12, 48); // ⚡ 24,96→12,48
+  railGeo.scale(1, 0.16, 0.60);
+  const railMat = new THREE.MeshPhongMaterial({ color: 0x180c04, specular: 0x1a0d04, shininess: 30 });
+  const rail = new THREE.Mesh(railGeo, railMat);
+  rail.position.y = 0.06; rail.receiveShadow = false;
+  tableGroup.add(rail);
+
+  // Gold neon trim ring — emissive for glow effect
+  const trimGeo = new THREE.TorusGeometry(7.4, 0.07, 8, 48); // ⚡ 14,96→8,48
+  trimGeo.scale(1, 0.45, 0.60);
+  const trimMat = new THREE.MeshPhongMaterial({ color: 0xd4a017, emissive: 0x7a5000, shininess: 80, specular: 0xffd060 });
+  const trim = new THREE.Mesh(trimGeo, trimMat);
+  trim.position.y = 0.14;
+  tableGroup.add(trim);
+
+  // Second gold trim at base of rail
+  const trim2Geo = new THREE.TorusGeometry(7.4, 0.04, 6, 48); // ⚡ 10,96→6,48
+  trim2Geo.scale(1, 0.3, 0.60);
+  const trim2 = new THREE.Mesh(trim2Geo, trimMat);
+  trim2.position.y = -0.02;
+  tableGroup.add(trim2);
+
+  // ── GOLD CENTER BETTING LINE ──────────────────────────────────
+  const lineGeo = new THREE.PlaneGeometry(8, 0.06);
+  const lineMat = new THREE.MeshLambertMaterial({ color: 0xd4a017, emissive: 0x5a3800 });
+  const line = new THREE.Mesh(lineGeo, lineMat);
+  line.rotation.x = -Math.PI/2;
+  line.position.y = 0.150;
+  tableGroup.add(line);
+
+  // Cross line (creates + on felt)
+  const line2 = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 5.5), lineMat);
+  line2.rotation.x = -Math.PI/2;
+  line2.position.y = 0.151;
+  tableGroup.add(line2);
+
+  // Center circle — dealer position
+  const dealerCircle = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.5, 0.5, 0.015, 16), // ⚡ 32→16
+    new THREE.MeshPhongMaterial({ color: 0x0a4018, emissive: 0x041008 })
+  );
+  dealerCircle.position.y = 0.152;
+  tableGroup.add(dealerCircle);
+
+  const dealerRing = new THREE.Mesh(
+    new THREE.TorusGeometry(0.5, 0.03, 6, 16), // ⚡ 8,32→6,16
+    trimMat
+  );
+  dealerRing.rotation.x = Math.PI/2;
+  dealerRing.position.y = 0.155;
+  tableGroup.add(dealerRing);
+
+  // ── LOGO RING (central decorative) ───────────────────────────
+  const logoRing = new THREE.Mesh(
+    new THREE.TorusGeometry(2.4, 0.045, 6, 32), // ⚡ 8,64→6,32
+    new THREE.MeshLambertMaterial({ color: 0xd4a017, emissive: 0x5a3800 })
+  );
+  logoRing.rotation.x = Math.PI/2;
+  logoRing.position.y = 0.152;
+  tableGroup.add(logoRing);
+
+  // Inner logo ring
+  const logoRing2 = new THREE.Mesh(
+    new THREE.TorusGeometry(2.0, 0.025, 5, 24), // ⚡ 6,48→5,24
+    new THREE.MeshLambertMaterial({ color: 0xc09010, emissive: 0x4a2800 })
+  );
+  logoRing2.rotation.x = Math.PI/2;
+  logoRing2.position.y = 0.153;
+  tableGroup.add(logoRing2);
+
+  // ── TABLE LEGS — mahogany with gold caps ──────────────────────
+  for(let i=0; i<6; i++) {
+    const legGeo = new THREE.CylinderGeometry(0.20, 0.26, 3.8, 8); // ⚡ 12→8
+    const legMat = new THREE.MeshPhongMaterial({ color: 0x280e02, specular: 0x100601, shininess: 20 });
+    const leg = new THREE.Mesh(legGeo, legMat);
+    const a = (i/6)*Math.PI*2;
+    leg.position.set(Math.cos(a)*5.0, -2.1, Math.sin(a)*3.0);
+    // leg.castShadow = true; ⚡ eliminado — sombras desactivadas
+    tableGroup.add(leg);
+    // Gold cap
+    const cap = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.28, 0.28, 0.1, 12),
+      trimMat
+    );
+    cap.position.set(Math.cos(a)*5.0, -3.95, Math.sin(a)*3.0);
+    tableGroup.add(cap);
+  }
+
+  // ── CHIP STACKS — colored and glowing ────────────────────────
+  const chipData = [
+    { color: 0xff2222, emissive: 0x660000 },
+    { color: 0x2255ff, emissive: 0x001166 },
+    { color: 0x22cc44, emissive: 0x006622 },
+    { color: 0x111111, emissive: 0x000000 },
+    { color: 0xeeeeee, emissive: 0x444444 },
+    { color: 0xffcc00, emissive: 0x664400 },
+    { color: 0xcc44cc, emissive: 0x550055 },
+    { color: 0x00cccc, emissive: 0x004444 },
+  ];
+  const chipMeshRefs = [];
+  for(let stack=0; stack<8; stack++) {
+    const angle = (stack/8)*Math.PI*2;
+    const cx = Math.cos(angle)*4.2;
+    const cz = Math.sin(angle)*2.6;
+    const cd = chipData[stack % chipData.length];
+    const count = 3 + Math.floor(Math.random()*5);
+    const chipMat = new THREE.MeshLambertMaterial({ // ⚡ Phong→Lambert: sin cálculo specular
+      color: cd.color
+    });
+    for(let h=0; h<count; h++) {
+      const chip = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.21, 0.21, 0.065, 12), // ⚡ 20→12 segmentos
+        chipMat
+      );
+      chip.position.set(cx, 0.20 + h*0.07, cz);
+      // chip.castShadow eliminado — sombras desactivadas en renderer
+      // Store for animation
+      chipMeshRefs.push({ mesh: chip, baseY: 0.20 + h*0.07, phase: Math.random()*Math.PI*2, stackIdx: stack });
+      tableGroup.add(chip);
+    }
+    // Chip edge stripe
+    const stripe = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.215, 0.215, 0.065*count, 20, 1, true),
+      new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.08, side: THREE.BackSide })
+    );
+    stripe.position.set(cx, 0.20 + (count/2)*0.07, cz);
+    tableGroup.add(stripe);
+  }
+  scene.userData.chipMeshRefs = chipMeshRefs;
+
+  scene.add(tableGroup);
+
+  // ── DEALER / CROUPIER FIGURE ──────────────────────────────────
+  const croupierGroup = new THREE.Group();
+  // Body — dark navy dealer jacket
+  const cBody = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.30, 0.38, 1.1, 16),
+    new THREE.MeshPhongMaterial({ color: 0x0e0e3a, specular: 0x111155, shininess: 15 })
+  );
+  cBody.position.set(0, 1.25, -5.2); scene.add(cBody);
+
+  // White dress shirt
+  const cShirt = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.16, 0.20, 0.5, 12),
+    new THREE.MeshPhongMaterial({ color: 0xf0f0f0, shininess: 5 })
+  );
+  cShirt.position.set(0, 1.55, -5.2); scene.add(cShirt);
+
+  // Head
+  const cHead = new THREE.Mesh(
+    new THREE.SphereGeometry(0.30, 10, 10), // ⚡ 16→10
+    new THREE.MeshPhongMaterial({ color: 0xedc88a, specular: 0x221100, shininess: 12 })
+  );
+  cHead.position.set(0, 2.05, -5.2); scene.add(cHead);
+
+  // Bow-tie (two small boxes)
+  const btMat = new THREE.MeshPhongMaterial({ color: 0x880000, shininess: 40 });
+  [-1,1].forEach(s => {
+    const bt = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.06, 0.04), btMat);
+    bt.position.set(s*0.07, 1.65, -4.94);
+    bt.rotation.z = s * 0.3;
+    scene.add(bt);
+  });
+
+  // Visor hat
+  const hatBrim = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.40, 0.40, 0.06, 14), // ⚡ 24→14
+    new THREE.MeshPhongMaterial({ color: 0x111111, shininess: 30 })
+  );
+  hatBrim.position.set(0, 2.34, -5.2); scene.add(hatBrim);
+  const hatTop = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.22, 0.28, 0.24, 16),
+    new THREE.MeshPhongMaterial({ color: 0x0a0a0a, shininess: 20 })
+  );
+  hatTop.position.set(0, 2.50, -5.2); scene.add(hatTop);
+  // Hat band in gold
+  const hatBand = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.285, 0.285, 0.055, 16),
+    new THREE.MeshPhongMaterial({ color: 0xd4a017, emissive: 0x6a4800 })
+  );
+  hatBand.position.set(0, 2.37, -5.2); scene.add(hatBand);
+
+  // ── CASINO FLOOR — rich dark burgundy carpet with pattern ─────
+  const floorMat = new THREE.MeshLambertMaterial({ color: 0x160410 }); // ⚡ Phong→Lambert
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), floorMat); // ⚡ 80→60
+  floor.rotation.x = -Math.PI/2;
+  floor.position.y = -3.85;
+  floor.receiveShadow = false; // ⚡
+  scene.add(floor);
+
+  // ⚡ Reducidos los carpet rings: TorusSegments 80→40, tubeSegments 6→4
+  for(let r of [12, 20]) { // era [12,20,28] — quitamos el más lejano
+    const carpetRing = new THREE.Mesh(
+      new THREE.TorusGeometry(r, 0.15, 4, 40),
+      new THREE.MeshLambertMaterial({ color: 0x220820 })
+    );
+    carpetRing.rotation.x = Math.PI/2;
+    carpetRing.position.y = -3.83;
+    scene.add(carpetRing);
+  }
+
+  // ── CEILING ───────────────────────────────────────────────────
+  const ceiling = new THREE.Mesh(
+    new THREE.PlaneGeometry(80, 80),
+    new THREE.MeshLambertMaterial({ color: 0x060406 })
+  );
+  ceiling.rotation.x = Math.PI/2;
+  ceiling.position.y = 24;
+  scene.add(ceiling);
+
+  // ⚡ Reducidas de 5 lámparas a 3, y sin PointLight por lámpara (las 4 luces del setup ya iluminan)
+  const lampPositions = [-6, 0, 6]; // era [-8,-4,0,4,8]
+  lampPositions.forEach((lx, li) => {
+    const cord = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.025, 0.025, 7, 4), // ⚡ 6→4 segmentos
+      new THREE.MeshLambertMaterial({ color: 0x0a0a0a })
+    );
+    cord.position.set(lx, 18.5, 0);
+    scene.add(cord);
+
+    const shade = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.12, 0.72, 0.65, 12, 1, true), // ⚡ 20→12
+      new THREE.MeshLambertMaterial({ color: 0x1e1200, side: THREE.DoubleSide })
+    );
+    shade.position.set(lx, 14.8, 0);
+    scene.add(shade);
+
+    const bulb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.12, 6, 6), // ⚡ 10→6
+      new THREE.MeshLambertMaterial({ color: 0xfffdd0, emissive: 0xfff8a0 })
+    );
+    bulb.position.set(lx, 14.65, 0);
+    scene.add(bulb);
+    // ⚡ PointLight por lámpara eliminado — eran 5 PointLights extra innecesarios
+  });
+
+  // ── WALLS — dark with wood paneling feel ──────────────────────
+  const wallMat = new THREE.MeshPhongMaterial({ color: 0x0c0508, specular: 0x050305, shininess: 2 });
+  [-1,1].forEach(side => {
+    const wall = new THREE.Mesh(new THREE.PlaneGeometry(80, 30), wallMat);
+    wall.position.set(side*40, 10, 0);
+    wall.rotation.y = -side*Math.PI/2;
+    scene.add(wall);
+  });
+  const backWall = new THREE.Mesh(new THREE.PlaneGeometry(80, 30), wallMat);
+  backWall.position.set(0, 10, -35);
+  scene.add(backWall);
+
+  // ── NEON SIGN STRIPS on back wall ────────────────────────────
+  const neonSignColors = [
+    { c: 0xff2244, e: 0xff0022 },
+    { c: 0x4488ff, e: 0x2244ff },
+    { c: 0xff8800, e: 0xff5500 },
+    { c: 0xff2244, e: 0xff0022 },
+  ];
+  [-10,-4,4,10].forEach((x, i) => {
+    const neonSign = new THREE.Mesh(
+      new THREE.BoxGeometry(4.5, 0.14, 0.06),
+      new THREE.MeshLambertMaterial({ // ⚡ Phong→Lambert
+        color: neonSignColors[i].c,
+        emissive: neonSignColors[i].e
+      })
+    );
+    neonSign.position.set(x, 7.5 + (i%2)*0.9, -34.5);
+    scene.add(neonSign);
+    // ⚡ PointLight de cada neón eliminado — eran 4 luces extra innecesarias
+  });
+
+  // ── MIRROR BALL (rotating disco/casino sphere) ─────────────────
+  const mirrorBallGeo = new THREE.SphereGeometry(0.6, 10, 10); // ⚡ 16→10 — está a 20 unidades, nadie nota la diferencia
+  const mirrorBallMat = new THREE.MeshPhongMaterial({
+    color: 0xffffff, specular: 0xffffff, shininess: 200,
+    emissive: 0x111111
+  });
+  const mirrorBall = new THREE.Mesh(mirrorBallGeo, mirrorBallMat);
+  mirrorBall.position.set(0, 20, 0);
+  scene.add(mirrorBall);
+  scene.userData.mirrorBall = mirrorBall;
+
+  // Mirror ball cord
+  const mbCord = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.02, 0.02, 4, 5),
+    new THREE.MeshLambertMaterial({ color: 0x080808 })
+  );
+  mbCord.position.set(0, 22, 0);
+  scene.add(mbCord);
+
+  // ⚡ mirrorLight eliminado — SpotLight adicional que barría la escena era costoso
+  scene.userData.mirrorBall = mirrorBall;
+
+  // ── DECORATIVE SLOT-MACHINE SILHOUETTES on sides ──────────────
+  [-18, 18].forEach(x => {
+    const slotBody = new THREE.Mesh(
+      new THREE.BoxGeometry(1.8, 3.5, 0.9),
+      new THREE.MeshLambertMaterial({ color: 0x1a0a00 }) // ⚡ Phong→Lambert
+    );
+    slotBody.position.set(x, -0.5, -12);
+    scene.add(slotBody);
+    const slotScreen = new THREE.Mesh(
+      new THREE.BoxGeometry(1.2, 1.0, 0.05),
+      new THREE.MeshLambertMaterial({ color: 0x002244, emissive: 0x001122 })
+    );
+    slotScreen.position.set(x, 0.2, -11.56);
+    scene.add(slotScreen);
+    // ⚡ PointLight por slot eliminado — 2 luces extra innecesarias
+  });
+}
+
+function buildPlayers() {
+  playerMeshes.forEach(m => {
+    if(m.body) scene.remove(m.body);
+    if(m.head) scene.remove(m.head);
+  });
+  playerMeshes = [];
+
+  const colors = [0x4488ff, 0xff4444, 0x44cc44, 0xff8800, 0xcc44cc, 0x00cccc, 0xffdd00];
+  players.forEach((p, i) => {
+    const angle = (i / players.length) * Math.PI * 2 - Math.PI/2;
+    const rx = 6.2, ry = 4.0;
+    const x = Math.cos(angle) * rx;
+    const z = Math.sin(angle) * ry;
+
+    const body = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.28, 0.35, 0.95, 8), // ⚡ 12→8 segmentos
+      new THREE.MeshLambertMaterial({ color: colors[i % colors.length] }) // ⚡ Phong→Lambert
+    );
+    body.position.set(x, 1.1, z);
+    scene.add(body);
+
+    const head = new THREE.Mesh(
+      new THREE.SphereGeometry(0.3, 8, 8), // ⚡ 12→8
+      new THREE.MeshLambertMaterial({ color: p.isML ? 0xffdd00 : (p.isHuman ? 0x88ddff : 0xf5c8a0) })
+    );
+    head.position.set(x, 1.78, z);
+    scene.add(head);
+
+    playerMeshes.push({ body, head, x, z, index: i });
+    p.x = x; p.z = z;
+  });
+
+  buildPlayerLabels();
+}
+
+let playerLabels = [];
+function buildPlayerLabels() {
+  playerLabels.forEach(el => el.remove());
+  playerLabels = [];
+  players.forEach((p, i) => {
+    const div = document.createElement('div');
+    div.id = 'plabel_'+i;
+    div.className = 'player-label';
+    const tag = p.isHuman && gameMode !== 'local' ? ' 🎮' : p.isML ? ' 🧠' : '';
+    const chipIcon = p.isML ? '🤖' : p.isHuman ? '👤' : '🎯';
+    div.innerHTML = `<b>${chipIcon} ${p.name}${tag}</b><br><span style="color:#d4a017">$<span id="chips_${i}">${p.chips}</span></span>`;
+    document.body.appendChild(div);
+    playerLabels.push(div);
+  });
+}
+
+function updatePlayerLabels() {
+  players.forEach((p, i) => {
+    const el = document.getElementById('chips_'+i);
+    if(el) el.textContent = p.chips;
+    const label = document.getElementById('plabel_'+i);
+    if(!label) return;
+    const isActive = actionIndex === i && gameRunning && !p.folded;
+    label.className = 'player-label' + (isActive ? ' active-turn' : '') + (p.folded ? ' folded' : '');
+    if(p.x !== undefined) {
+      const pos = new THREE.Vector3(p.x, 2.6, p.z);
+      pos.project(camera);
+      const sx = (pos.x * 0.5 + 0.5) * window.innerWidth;
+      const sy = (-pos.y * 0.5 + 0.5) * window.innerHeight;
+      label.style.left = (sx - 44)+'px';
+      label.style.top  = (sy - 22)+'px';
+    }
+  });
+}
+
+// ⚡ OPTIMIZACIÓN ANIMATE LOOP
+// Problemas originales:
+// 1. updatePlayerLabels() proyectaba coordenadas 3D→2D en CADA frame (60fps) → costoso
+// 2. chipMeshRefs animaba decenas de chips individualmente cada frame
+// 3. Neon flicker usaba Math.random() para CADA frame → impredecible y sin throttle
+// 4. mirrorLight.target.updateMatrixWorld() en cada frame → forzaba recálculo de escena
+//
+// SOLUCIONES APLICADAS:
+// - Throttle labels: actualizar solo cada 3 frames con frameCount
+// - Reducir chip float: usar sin() con paso mayor para menos objetos
+// - Limitar FPS a ~50 con delta time check
+// - Simplificar neon: sin Math.random() por frame, solo sin() estable
+let _frameCount = 0;
+let _lastFrameTime = 0;
+const _TARGET_FRAME_MS = 20; // ~50 FPS max — evita quemar GPU en monitores 144Hz
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  // ⚡ Throttle FPS — no renderizar más rápido de lo necesario
+  const now = performance.now();
+  if(now - _lastFrameTime < _TARGET_FRAME_MS) return;
+  _lastFrameTime = now;
+
+  _frameCount++;
+  const t = now * 0.001;
+
+  // ── Cámara: misma órbita pero sin sin() múltiple
+  const orbitSpeed = 0.045; // era 0.055 → más lenta = más cinematográfico
+  camera.position.x = Math.sin(t * orbitSpeed) * 2.5;
+  camera.position.z = 14 + Math.sin(t * orbitSpeed * 0.6) * 1.0;
+  camera.position.y = 15.5 + Math.sin(t * orbitSpeed * 0.8) * 0.5;
+  camera.lookAt(0, 0.8, 0);
+
+  // ── Mesa: rotación suave (sin cambios)
+  if(tableGroup) tableGroup.rotation.y = Math.sin(t * 0.05) * 0.006;
+
+  // ── Chips: ⚡ solo cada 2 frames — el ojo no nota la diferencia
+  if(_frameCount % 2 === 0) {
+    const chips = scene.userData.chipMeshRefs || [];
+    chips.forEach(c => {
+      c.mesh.position.y = c.baseY + Math.sin(t * 1.0 + c.phase) * 0.015;
+      c.mesh.rotation.y = t * 0.25 + c.phase;
+    });
+  }
+
+  // ── Mirror ball: simplificado sin target.updateMatrixWorld()
+  if(scene.userData.mirrorBall) {
+    scene.userData.mirrorBall.rotation.y = t * 0.35;
+  }
+
+  // ── Luces: ⚡ animación simplificada — sin Math.random() por frame
+  // El original usaba Math.random() < 0.02 cada frame → imprevisible y costoso
+  const animLights = scene.userData.animLights;
+  if(animLights && animLights.rimLight) {
+    // Pulso suave con sin() — estable y sin cálculo random
+    animLights.rimLight.intensity = 1.5 + Math.sin(t * 0.5) * 0.4;
+  }
+
+  // ── Player labels: ⚡ solo cada 3 frames → ahorra ~66% de proyecciones 3D
+  if(_frameCount % 3 === 0) {
+    updatePlayerLabels();
+  }
+
+  renderer.render(scene, camera);
+}
+
+// ============================================================
+// BARAJAR Y MAZO
+// ============================================================
+function createDeck() {
+  deck = [];
+  for(let s=0; s<4; s++) for(let r=0; r<13; r++) {
+    deck.push({ suit: SUITS[s], suitName: SUIT_NAMES[s], rank: RANKS[r], value: r+2 });
+  }
+}
+function shuffleDeck() {
+  for(let i=deck.length-1; i>0; i--) {
+    const j = Math.floor(Math.random()*(i+1));
+    [deck[i],deck[j]] = [deck[j],deck[i]];
+  }
+}
+function dealCard() { return deck.pop(); }
+function cardStr(c) { return c.rank + c.suit; }
+function cardHTML(c) {
+  const isRed = c.suit==='♥'||c.suit==='♦';
+  return `<div class="hand-card ${isRed?'red':'black'}">
+    <span class="card-rank">${c.rank}</span>
+    <span class="card-suit">${c.suit}</span>
+  </div>`;
+}
+
+// ============================================================
+// JUGADORES
+// ============================================================
+function initPlayers(humanName) {
+  players = [];
+  const botNames = ['Bot Alex','Bot Sam','Bot Lee','Bot Max','Bot Nova'];
+  players.push({
+    name: humanName || 'Tú',
+    isHuman: true, isML: false,
+    chips: 1000, bank: globalBank,
+    bet: 0, folded: false, hand: [],
+    mlLevel: -1, x: 0, z: 0
+  });
+  for(let i=0; i<5; i++) {
+    players.push({
+      name: botNames[i], isHuman: false, isML: false,
+      chips: 1000, bank: 20000,
+      bet: 0, folded: false, hand: [],
+      mlLevel: Math.floor(Math.random()*3), x: 0, z: 0
+    });
+  }
+  humanIndex = 0;
+  humanIndices = [0]; // track all human indices
+}
+
+function initPlayersMulti(humanNames) {
+  // LOCAL MULTI: multiple humans + fill remaining seats with bots
+  players = [];
+  humanIndices = [];
+  const botNames = ['Bot Alex','Bot Sam','Bot Lee','Bot Max','Bot Nova'];
+  const maxPlayers = 6;
+  const numHumans = Math.min(humanNames.length, 4);
+  const numBots   = Math.max(0, maxPlayers - numHumans);
+
+  humanNames.slice(0, numHumans).forEach((name, i) => {
+    humanIndices.push(i);
+    players.push({
+      name: name || `Jugador ${i+1}`,
+      isHuman: true, isML: false,
+      chips: 1000, bank: i === 0 ? globalBank : 20000,
+      bet: 0, folded: false, hand: [],
+      mlLevel: -1, x: 0, z: 0
+    });
+  });
+  for(let i=0; i<numBots; i++) {
+    players.push({
+      name: botNames[i], isHuman: false, isML: false,
+      chips: 1000, bank: 20000,
+      bet: 0, folded: false, hand: [],
+      mlLevel: Math.floor(Math.random()*3), x: 0, z: 0
+    });
+  }
+  humanIndex = 0; // first human is the "primary" for bank display
+}
+
+function initPlayersOnline(humanNames, myIdx) {
+  players = [];
+  humanIndex = myIdx;
+
+  const botSlots = 6 - humanNames.length;
+  const botNames = ['Bot Alpha','Bot Beta','Bot Gamma','Bot Delta','Bot Epsilon','Bot Zeta'];
+
+  humanNames.forEach((name, i) => {
+    players.push({
+      name,
+      isHuman: i === myIdx,
+      isML: false,
+      chips: 1000, bank: 20000,
+      bet: 0, folded: false, hand: [],
+      mlLevel: -1, x: 0, z: 0
+    });
+  });
+
+  for(let i=0; i<botSlots; i++) {
+    players.push({
+      name: botNames[i], isHuman: false, isML: false,
+      chips: 1000, bank: 20000,
+      bet: 0, folded: false, hand: [],
+      mlLevel: Math.floor(Math.random()*3), x: 0, z: 0
+    });
+  }
+}
+
+function resetPlayerHands() {
+  // BUG FIX: Clear all hand data completely before each new hand.
+  // Previously, if a hand ended early (fold), p.hand still had old cards
+  // from the previous round, causing them to appear in UI the next round.
+  players.forEach(p => {
+    p.hand = [];       // clear hand cards completely
+    p.bet = 0;
+    p.folded = false;
+    p._lastAction = undefined; // reset action tracker for ML samples
+  });
+  // Also clear community cards array and DOM
+  communityCards = [];
+  const ccEl = document.getElementById('communityCards');
+  if(ccEl) ccEl.innerHTML = '';
+  const phEl = document.getElementById('playerHand');
+  if(phEl) phEl.innerHTML = '';
+}
+
+// ============================================================
+// INICIO DE MANO
+// ============================================================
+// ============================================================
+// BOT REPLACEMENT — bots that bust out are swapped for fresh ones
+// ============================================================
+function replaceBrokeBots() {
+  if(gameMode !== 'local') return;
+  const pool = getBotNamePool();
+  let poolIdx = 0;
+  players.forEach((p, i) => {
+    if(!p.isHuman && p.chips <= 0 && p.bank <= 0) {
+      const newName = pool[poolIdx] || ('Bot #'+(roundsPlayed+i));
+      poolIdx++;
+      const newLevel = Math.floor(Math.random()*3);
+      setMsg(`${p.name} se va de la mesa. Entra ${newName}.`);
+      players[i] = {
+        name: newName, isHuman: false, isML: false,
+        chips: 1000, bank: 20000,
+        bet: 0, folded: false, hand: [],
+        mlLevel: newLevel, x: p.x, z: p.z
+      };
+      // Init ML stats for new bot
+      initBotStats(newName);
+      buildPlayers();
+    }
+  });
+}
+
+function initBotStats(name) {
+  if(!mlKnowledge.botStats[name]) {
+    mlKnowledge.botStats[name] = {
+      hands: 0, wins: 0,
+      folds: 0, calls: 0, raises: 0,
+      totalWon: 0, totalLost: 0,
+      aggressiveness: 0.5   // 0=passive, 1=aggressive
+    };
+  }
+}
+
+function startHand() {
+  if(players.every(p => p.bank < 100 && p.chips < 100)) {
+    setMsg('¡Juego terminado! Todos sin fondos.'); return;
+  }
+  players.forEach(p => {
+    if(p.chips < 100 && p.bank >= 1000) { p.bank -= 1000; p.chips += 1000; }
+    else if(p.chips < 100 && p.bank > 0) { p.chips += p.bank; p.bank = 0; }
+  });
+
+  // Replace any broke bots between hands
+  replaceBrokeBots();
+
+  createDeck(); shuffleDeck();
+  resetPlayerHands(); // clears hands + community cards + DOM
+  pot = 0; currentBet = 0;
+  phase = 'preflop';
+  gameRunning = true;
+  roundsPlayed++;
+
+  dealerIndex = (dealerIndex + 1) % players.length;
+  players.forEach(p => { p.hand.push(dealCard()); p.hand.push(dealCard()); });
+
+  const sbIdx = (dealerIndex+1) % players.length;
+  const bbIdx = (dealerIndex+2) % players.length;
+  const sb = 10, bb = 20;
+  postBlind(sbIdx, sb);
+  postBlind(bbIdx, bb);
+  currentBet = bb;
+  actionIndex = (bbIdx+1) % players.length;
+
+  // Betting round tracking: BB is treated as last aggressor so everyone else must act
+  roundActed = {};
+  lastRaiser = bbIdx;
+  bettingRoundStart = actionIndex;
+
+  // Init ML stats for all bots
+  players.forEach(p => { if(!p.isHuman) initBotStats(p.name); });
+
+  updateUI();
+  showPlayerHand();
+  updateCommunityCards();
+  setPhaseLabel('Pre-Flop');
+  setMsg(`Blinds: ${players[sbIdx].name}=$${sb}, ${players[bbIdx].name}=$${bb}`);
+  updateBankUI();
+
+  document.getElementById('addBot6Btn').style.display = roundsPlayed >= 5 && !players.find(p=>p.isML) ? 'block' : 'none';
+
+  if(gameMode === 'host') broadcastGameState();
+
+  setTimeout(() => runActionLoop(), 500); // ⚡ era 800ms
+}
+
+function postBlind(idx, amount) {
+  const p = players[idx];
+  const actual = Math.min(amount, p.chips);
+  p.chips -= actual; p.bet += actual; pot += actual;
+}
+
+// ============================================================
+// LOOP DE ACCIÓN
+// ============================================================
+function runActionLoop() {
+  if(!gameRunning) return;
+
+  const activePlayers = players.filter(p => !p.folded);
+  if(activePlayers.length === 1) {
+    declareWinner(activePlayers[0]); return;
+  }
+
+  if(roundOver()) {
+    nextPhase(); return;
+  }
+
+  if(players[actionIndex].folded) {
+    actionIndex = (actionIndex+1) % players.length;
+    setTimeout(runActionLoop, 100); return;
+  }
+
+  const p = players[actionIndex];
+  updatePlayerLabels();
+
+  if(gameMode === 'host') broadcastGameState();
+
+  // A player is "locally human" if they are human AND it's local mode (or they are the myPlayerId in online)
+  const isLocalHuman = p.isHuman && (gameMode === 'local' || (gameMode !== 'client' && actionIndex === myPlayerId));
+  const isRemoteHuman = p.isHuman && gameMode === 'client' && actionIndex !== myPlayerId;
+
+  if(isLocalHuman) {
+    // For local multi, show whose turn it is prominently
+    if(humanIndices.length > 1) {
+      setMsg(`🎮 Turno de ${p.name} — toma el dispositivo`);
+    }
+    showPlayerHand(); // always refresh hand for current player
+    showActionPanel();
+  } else if(!p.isHuman && (gameMode === 'local' || isHost)) {
+    hideActionPanel();
+    setMsg(`${p.name} está pensando...`);
+    // ⚡ Reducido de 900+600 a 350+350 — el juego se siente más fluido y responsivo
+    setTimeout(() => { botAct(p); }, 350 + Math.random()*350);
+  } else if(isRemoteHuman) {
+    // Waiting for remote human
+    hideActionPanel();
+    setMsg(`Esperando a ${p.name}...`);
+  }
+}
+
+// ============================================================
+// BETTING ROUND LOGIC — corrected
+// ============================================================
+
+/**
+ * A betting round is over when every active (not-folded, not all-in) player
+ * has acted at least once since the last raise, AND all bets are equal.
+ */
+function roundOver() {
+  const active = players.filter(p => !p.folded);
+  if(active.length <= 1) return true;
+
+  // Everyone all-in or equal bets AND everyone has acted
+  const notAllIn = active.filter(p => p.chips > 0);
+  if(notAllIn.length === 0) return true; // everyone all-in
+
+  // All active players must have equal bets
+  const maxBet = Math.max(...active.map(p => p.bet));
+  const allEqual = active.every(p => p.bet === maxBet || p.chips === 0);
+  if(!allEqual) return false;
+
+  // Every non-folded, non-all-in player must have acted since last raise
+  const allActed = notAllIn.every(p => roundActed[players.indexOf(p)] === true);
+  return allActed;
+}
+
+function startNewBettingRound() {
+  // Reset per-player "has acted" flags and clear bets for the new street
+  players.forEach(p => { p.bet = 0; });
+  roundActed = {};
+  lastRaiser = -1;
+  currentBet = 0;
+  // First active player left of dealer opens action
+  actionIndex = firstActiveAfter(dealerIndex);
+  bettingRoundStart = actionIndex;
+}
+
+function nextPhase() {
+  const phaseOrder = ['preflop','flop','turn','river','showdown'];
+  const nextIdx = phaseOrder.indexOf(phase) + 1;
+  if(nextIdx >= phaseOrder.length) { showdown(); return; }
+  phase = phaseOrder[nextIdx];
+
+  if(phase === 'flop') {
+    communityCards.push(dealCard(), dealCard(), dealCard());
+    setPhaseLabel('Flop');
+    setMsg('🃏 Flop — nueva ronda de apuestas');
+  } else if(phase === 'turn') {
+    communityCards.push(dealCard());
+    setPhaseLabel('Turn');
+    setMsg('🃏 Turn — nueva ronda de apuestas');
+  } else if(phase === 'river') {
+    communityCards.push(dealCard());
+    setPhaseLabel('River');
+    setMsg('🃏 River — última ronda de apuestas');
+  } else if(phase === 'showdown') {
+    showdown(); return;
+  }
+
+  updateCommunityCards();
+  updateUI();
+  startNewBettingRound();
+
+  if(gameMode === 'host') broadcastGameState();
+  setTimeout(runActionLoop, 350); // ⚡ era 700ms
+}
+
+function firstActiveAfter(idx) {
+  for(let i=1; i<=players.length; i++) {
+    const ci = (idx+i) % players.length;
+    if(!players[ci].folded) return ci;
+  }
+  return idx;
+}
+
+// ============================================================
+// ACCIÓN DEL JUGADOR HUMANO
+// ============================================================
+function playerAction(action) {
+  const p = players[actionIndex];
+  // In local mode (single or multi-human), accept action from whoever's turn it is
+  if(!p || !p.isHuman) return;
+  if(gameMode !== 'local' && actionIndex !== myPlayerId) return;
+
+  if(gameMode === 'client') {
+    // Send action to host
+    const raiseAmount = parseInt(document.getElementById('raiseSlider').value);
+    sendOnlineAction(action, raiseAmount);
+    hideActionPanel();
+    setMsg('Acción enviada, esperando...');
+    return;
+  }
+
+  executeAction(p, action, parseInt(document.getElementById('raiseSlider').value));
+}
+
+function executeAction(p, action, raiseAmount) {
+  const idx = players.indexOf(p);
+
+  if(action === 'fold') {
+    p.folded = true;
+    p._lastAction = 0;
+    setMsg(`${p.name} hace Fold`);
+    recordBotAction(p, 'fold');
+    roundActed[idx] = true;
+  } else if(action === 'check') {
+    if(currentBet > p.bet) {
+      action = 'call';
+    } else {
+      p._lastAction = 1;
+      setMsg(`${p.name} hace Check`);
+      recordBotAction(p, 'check');
+      roundActed[idx] = true;
+    }
+  }
+
+  if(action === 'call') {
+    const toCall = Math.min(currentBet - p.bet, p.chips);
+    p.chips -= toCall; p.bet += toCall; pot += toCall;
+    p._lastAction = 1;
+    setMsg(`${p.name} llama $${toCall}`);
+    recordBotAction(p, 'call');
+    roundActed[idx] = true;
+  } else if(action === 'raise') {
+    const minRaise = Math.max(currentBet * 2, currentBet + 20, 20);
+    const actual = Math.max(raiseAmount || minRaise, minRaise);
+    const toAdd = Math.min(actual - p.bet, p.chips);
+    p.chips -= toAdd; pot += toAdd; p.bet += toAdd;
+    currentBet = p.bet;
+    lastRaiser = idx;
+    p._lastAction = 2;
+    // Everyone else needs to act again after a raise
+    players.forEach((pl, i) => {
+      if(i !== idx && !pl.folded) roundActed[i] = false;
+    });
+    roundActed[idx] = true;
+    setMsg(`${p.name} sube a $${currentBet}`);
+    recordBotAction(p, 'raise');
+  }
+
+  // Track human style for ML adaptation
+  if(p.isHuman) {
+    const hs = mlKnowledge.humanStyle;
+    hs.actions++;
+    if(action === 'raise') hs.raiseFreq = (hs.raiseFreq * (hs.actions-1) + 1) / hs.actions;
+    if(action === 'fold')  hs.foldFreq  = (hs.foldFreq  * (hs.actions-1) + 1) / hs.actions;
+  }
+
+  hideActionPanel();
+  updateUI();
+  updateBankUI();
+
+  if(gameMode === 'host') broadcastGameState();
+
+  actionIndex = (idx+1) % players.length;
+  setTimeout(runActionLoop, 200); // ⚡ era 400ms → más responsivo
+}
+
+function recordBotAction(p, action) {
+  if(p.isHuman) return;
+  initBotStats(p.name);
+  const s = mlKnowledge.botStats[p.name];
+  if(action === 'fold')  s.folds++;
+  if(action === 'call')  s.calls++;
+  if(action === 'raise') { s.raises++; s.aggressiveness = Math.min(1, s.aggressiveness + 0.05); }
+  if(action === 'check') {}
+  s.hands = s.folds + s.calls + s.raises;
+}
+
+// ============================================================
+// BOT IA
+// ============================================================
+// ============================================================
+// BOT IA — ADVANCED ML DECISION ENGINE
+// ============================================================
+
+/**
+ * Q-Learning inspired decision table.
+ * States: (handStrength bucket) × (phase) × (potOdds bucket)
+ * Actions: fold / check_call / raise
+ * We approximate via a weighted scoring function instead of a full Q-table
+ * but track state-action outcomes to adjust weights over time.
+ */
+
+function getHandBucket(hs) {
+  // BUG FIX: thresholds originales eran demasiado altos para el rango real de handStrength.
+  // Con evaluateHandStrength corregida, manos medias dan 0.45–0.65,
+  // así que los buckets deben capturar esa zona, no empezar en 0.55.
+  if(hs >= 0.72) return 'strong';   // fue: 0.80 → dejaba casi todo en weak/marginal
+  if(hs >= 0.48) return 'medium';   // fue: 0.55
+  if(hs >= 0.30) return 'marginal'; // fue: 0.35
+  return 'weak';
+}
+
+function decideAction(p) {
+  const handStrength = evaluateHandStrength(p.hand, communityCards);
+  const toCall = Math.max(0, currentBet - p.bet);
+  const potOdds = (pot + toCall) > 0 ? toCall / (pot + toCall) : 0;
+  const level = p.isML ? 3 : p.mlLevel;
+
+  initBotStats(p.name);
+  const stats = mlKnowledge.botStats[p.name];
+  const winrate = stats.hands > 0 ? stats.wins / stats.hands : 0.5;
+  const agg = stats.aggressiveness;
+  const hb = getHandBucket(handStrength);
+
+  let aggMod = 0;
+  if(stats.hands > 3) {
+    if(winrate < 0.3) aggMod = -0.12;
+    else if(winrate > 0.6) aggMod = +0.12;
+  }
+  const effectiveAgg = Math.max(0.2, Math.min(1, agg + aggMod)); // min 0.2 para que nunca sea pasivo total
+  const humanRaiseFreq = mlKnowledge.humanStyle.raiseFreq;
+  const humanFoldFreq  = mlKnowledge.humanStyle.foldFreq;
+  const bluffAdjust = humanFoldFreq > 0.4 ? 0.15 : (humanFoldFreq < 0.15 ? -0.08 : 0);
+  const callAdjust = humanRaiseFreq > 0.4 ? -0.08 : 0;
+
+  // BUG FIX river: phaseMulti ahora tiene efecto real en agresividad
+  const isRiver = phase === 'river';
+  const riverBoost = isRiver ? 0.15 : 0; // raise más probable en river
+
+  // ── Level 3: REAL ML Bot ──────────────────────────────────
+  if(level === 3) {
+    return decideActionML(p, handStrength, potOdds, effectiveAgg, humanFoldFreq, humanRaiseFreq);
+  }
+
+  // ── Level 0: Mostly random ────────────────────────────────
+  if(level === 0) {
+    const r = Math.random();
+    if(hb === 'weak' && r < 0.35) return { action: currentBet === p.bet ? 'check' : 'fold' };
+    if(r < 0.15) return { action: currentBet === p.bet ? 'check' : 'fold' };
+    if(r < 0.60) return { action: currentBet === p.bet ? 'check' : 'call' };
+    return { action: 'raise', amount: currentBet + 20 + Math.floor(Math.random()*80) };
+  }
+
+  // ── Level 1: Hand-strength based ─────────────────────────
+  if(level === 1) {
+    if(hb === 'strong') {
+      if(Math.random() < 0.60 + effectiveAgg * 0.2 + riverBoost)
+        return { action: 'raise', amount: Math.min(currentBet + Math.floor(pot*(0.5+riverBoost)), p.chips+p.bet) };
+      return { action: currentBet === p.bet ? 'check' : 'call' };
+    }
+    if(hb === 'medium') {
+      if(currentBet === p.bet) {
+        if(isRiver && Math.random() < 0.25) // river: más raise con medium
+          return { action: 'raise', amount: Math.min(currentBet + Math.floor(pot*0.4), p.chips+p.bet) };
+        return { action: 'check' };
+      }
+      if(potOdds + callAdjust < handStrength * 0.95) return { action: 'call' };
+      return { action: 'fold' };
+    }
+    if(hb === 'marginal') {
+      if(currentBet === p.bet) return { action: 'check' };
+      if(Math.random() < 0.18) return { action: 'call' };
+      return { action: 'fold' };
+    }
+    if(currentBet === p.bet) return { action: 'check' };
+    if(Math.random() < 0.08) return { action: 'call' };
+    return { action: 'fold' };
+  }
+
+  // ── Level 2: Full — pot odds + aggressiveness + river fix ──
+  const bluffChance = 0.10 + effectiveAgg * 0.20 + bluffAdjust + riverBoost * 0.5;
+  const phaseMulti = phase === 'preflop' ? 0.80 : phase === 'flop' ? 0.95 : phase === 'turn' ? 1.05 : 1.25; // river aumentado
+
+  if(hb === 'strong') {
+    // BUG FIX river: prob de raise sube en river para mostrar valor
+    const raiseProb = 0.72 + effectiveAgg * 0.18 + riverBoost;
+    const raiseSize = Math.min(
+      currentBet + Math.floor(pot * (0.45 + effectiveAgg * 0.4) * phaseMulti),
+      p.chips + p.bet
+    );
+    if(Math.random() < raiseProb)
+      return { action: 'raise', amount: raiseSize };
+    return { action: currentBet === p.bet ? 'check' : 'call' };
+  }
+  if(hb === 'medium') {
+    const adjPotOdds = potOdds + callAdjust;
+    if(currentBet === p.bet) {
+      // BUG FIX: prob de raise en river con mano media aumentada
+      const medRaiseProb = 0.28 + effectiveAgg * 0.22 + riverBoost * 0.8;
+      if(Math.random() < medRaiseProb)
+        return { action: 'raise', amount: Math.min(currentBet + Math.floor(pot*0.40*phaseMulti), p.chips+p.bet) };
+      return { action: 'check' };
+    }
+    if(adjPotOdds < handStrength * 1.15) return { action: 'call' };
+    return { action: 'fold' };
+  }
+  if(hb === 'marginal') {
+    if(currentBet === p.bet) {
+      if(Math.random() < 0.14 + effectiveAgg * 0.12)
+        return { action: 'raise', amount: Math.min(currentBet + Math.floor(pot*0.35), p.chips+p.bet) };
+      return { action: 'check' };
+    }
+    const adjPotOdds = potOdds + callAdjust;
+    if(adjPotOdds < 0.22) return { action: 'call' };
+    return { action: 'fold' };
+  }
+  // weak — bluff posible en river si humano fold frecuente
+  if(currentBet === p.bet && Math.random() < bluffChance) {
+    return { action: 'raise', amount: Math.min(currentBet + Math.floor(pot * 0.55 * phaseMulti), p.chips+p.bet) };
+  }
+  if(currentBet === p.bet) return { action: 'check' };
+  if(potOdds + callAdjust < 0.18 && Math.random() < 0.22) return { action: 'call' };
+  return { action: 'fold' };
+}
+// ============================================================
+// BOT ML — DECISIÓN PROBABILÍSTICA CON REGRESIÓN LOGÍSTICA
+// ============================================================
+//
+// DIAGNÓSTICO DE BUGS ORIGINALES:
+// ─────────────────────────────────
+// BUG 1 — Bot siempre hacía fold:
+//   El modelo logístico con bias=-0.2 y pesos iniciales daba winProb ~0.45
+//   con manos medias. Los umbrales eran raise>0.72 y call>0.52, dejando
+//   casi todo por debajo → siempre fold. Solución: recalibrar pesos iniciales
+//   y usar decisiones PROBABILÍSTICAS (weighted random) en vez de if/else duros.
+//
+// BUG 2 — Sin raise en river:
+//   phaseMulti en river era 1.1 (correcto), pero el threshold de raise (0.72)
+//   era inalcanzable con los pesos mal calibrados. Además, la fase river
+//   no tenía boost de agresividad explícito. Solución: en river, subir
+//   la probabilidad de raise directamente en el sorteo ponderado.
+//
+// OVERFITTING en este contexto:
+//   Ejemplo concreto: si en las primeras 5 rondas el bot aprende que
+//   "par de Ases siempre gana" (handStrength alto → outcome=1 siempre),
+//   el modelo asigna peso muy alto a handStrength y hace RAISE en cada
+//   mano fuerte sin importar nada más (pot, opponents, river bluffs).
+//   Cuando enfrenta situaciones nuevas (más jugadores, pots grandes),
+//   ese patrón falla → overfitting: memorizó el pasado, no generalizó.
+//   SOLUCIÓN IMPLEMENTADA:
+//   1. Regularización L2 en trainWeights() → penaliza pesos extremos
+//   2. Epsilon-greedy: 15% de decisiones son aleatorias (exploración)
+//   3. Temperatura softmax: en vez de "siempre la mejor acción", elige
+//      con probabilidad proporcional al score → variedad realista
+// ─────────────────────────────────────────────────────────────
+
+function decideActionML(p, handStrength, potOdds, effectiveAgg, humanFoldFreq, humanRaiseFreq) {
+  const phaseNum = {preflop:0, flop:1, turn:2, river:3}[phase] || 0;
+  const isRiver = phase === 'river';
+  const isTurnOrRiver = phase === 'turn' || phase === 'river';
+  const canCheck = currentBet === p.bet;
+  const toCall = Math.max(0, currentBet - p.bet);
+
+  // ── 1. Obtener probabilidad base del modelo entrenado ────────
+  const sample = {
+    handStrength,
+    potOdds,
+    potSize: Math.min(pot / 1000, 1),
+    humanFoldFreq,
+    humanRaiseFreq,
+    phase: phaseNum
+  };
+  const rawProb = mlPredict(sample, mlDataset.weights);
+
+  // ── 2. EPSILON DINÁMICO: progresión realista del aprendizaje ──
+  // Al inicio (ronda 0): 40% aleatorio → juega mal
+  // Con el tiempo: reduce hasta 10% → mejora gradualmente
+  // Fórmula: explorationRate = max(0.10, 0.40 - roundsWithBot * 0.02)
+  // Ronda  0: 40% random (novato)
+  // Ronda  5: 30% random
+  // Ronda 10: 20% random
+  // Ronda 15+: 10% random (jugador sólido)
+  const roundsWithBot = mlDataset.roundsWithBot || 0;
+  const EPSILON = Math.max(0.10, 0.40 - roundsWithBot * 0.02);
+
+  // Degradación de la evaluación al inicio: el bot estima mal la fuerza de mano
+  // En las primeras rondas, añadimos ruido a handStrength para simular inexperiencia
+  const noiseLevel = Math.max(0, 0.20 - roundsWithBot * 0.015); // 0.20 → 0 gradualmente
+  const noisyHandStrength = Math.max(0, Math.min(1, handStrength + (Math.random() - 0.5) * noiseLevel * 2));
+
+  if(Math.random() < EPSILON) {
+    // Novato: en las primeras rondas, las decisiones aleatorias son más sesgadas hacia acciones malas
+    const rand = Math.random();
+    if(roundsWithBot < 5) {
+      // Muy novato: más fold/call erráticos, menos raise inteligente
+      if(rand < 0.35) return { action: 'fold', _mlProb: rawProb, _explore: true }; // fold demasiado
+      if(rand < 0.75) return { action: canCheck ? 'check' : 'call', _mlProb: rawProb, _explore: true };
+      return { action: 'raise', amount: currentBet + 20 + Math.floor(Math.random()*60), _mlProb: rawProb, _explore: true };
+    }
+    // Mejorando: decisiones aleatorias más razonables
+    if(rand < 0.5) return { action: canCheck ? 'check' : 'call', _mlProb: rawProb, _explore: true };
+    if(rand < 0.8) {
+      const bluffSize = Math.min(currentBet + Math.floor(pot * 0.5) + 20, p.chips + p.bet);
+      return { action: 'raise', amount: bluffSize, _mlProb: rawProb, _explore: true };
+    }
+    if(canCheck) return { action: 'check', _mlProb: rawProb, _explore: true };
+    return { action: 'fold', _mlProb: rawProb, _explore: true };
+  }
+
+  // ── 3. Ajuste por estado bias-variance ──────────────────────
+  // Underfitting (modelo muy simple) → explorar más, ser agresivo
+  // Overfitting (modelo muy específico) → suavizar con temperatura alta
+  // Balanceado → confiar en el modelo
+  let tempBoost = 0; // boost directo a winProb
+  let softmaxTemp = 1.0; // temperatura softmax: alta = más aleatorio
+  if(mlDataset.biasVarianceState === 'underfitting') {
+    tempBoost = +0.08;    // ser más agresivo cuando underfitting
+    softmaxTemp = 1.5;    // explorar más opciones
+  } else if(mlDataset.biasVarianceState === 'overfitting') {
+    tempBoost = 0;
+    softmaxTemp = 2.5;    // mucha temperatura → decisiones más variadas
+    // (evita que el bot "always raise" por haber memorizado)
+  } else {
+    softmaxTemp = 1.0;    // balanceado: confiar en el modelo
+  }
+
+  // ── 4. Boost por fase (river debe ser más agresivo) ──────────
+  const phaseBoost = isRiver ? 0.10 : isTurnOrRiver ? 0.05 : 0;
+  const winProb = Math.max(0, Math.min(1, rawProb + tempBoost + phaseBoost));
+
+  // ── 5. Calcular scores para cada acción (no umbrales duros) ──
+  // Basado en hand strength + winProb combinados
+  // En las primeras rondas usamos noisyHandStrength para simular evaluaciones pobres
+  const hs = roundsWithBot < 8 ? noisyHandStrength : handStrength;
+  const combined = (winProb * 0.6 + hs * 0.4); // mezcla modelo + heurística
+
+  // Score por acción — incluye contexto del pot y fase
+  const potFactor = Math.min(pot / 400, 1.5); // pot grande → más agresión
+  const raiseScore  = combined * (1.0 + potFactor * 0.3) + (isRiver ? 0.15 : 0);
+  const callScore   = (0.35 + combined * 0.5);
+  const checkScore  = canCheck ? (0.4 + combined * 0.3) : 0;
+  // Fold: tiene sentido si mano débil Y hay apuesta grande
+  const foldScore   = canCheck ? 0.0 : (1 - combined) * (0.5 + potOdds * 0.5);
+  // Bluff: mano débil + human fold frecuente
+  const bluffScore  = (1 - hs) * humanFoldFreq * (isRiver ? 0.9 : 0.5) * effectiveAgg;
+
+  // ── 6. Softmax sobre scores → probabilidades de decisión ────
+  // Softmax con temperatura: temperatura alta = distribución más uniforme
+  // (esto es la solución al overfitting: nunca SIEMPRE hacer lo mismo)
+  const scores = {
+    raise: raiseScore,
+    call:  callScore,
+    check: checkScore,
+    fold:  foldScore,
+    bluff: bluffScore
+  };
+  const entries = Object.entries(scores).filter(([k, v]) => {
+    if(k === 'check' && !canCheck) return false;
+    if(k === 'fold' && canCheck) return false;
+    return v > 0;
+  });
+
+  // exp(score / T) para cada acción
+  const exps = entries.map(([k, v]) => [k, Math.exp(v / softmaxTemp)]);
+  const sumExp = exps.reduce((s, [, e]) => s + e, 0);
+  const probs = exps.map(([k, e]) => [k, e / sumExp]);
+
+  // ── 7. Muestrear acción según distribución softmax ───────────
+  // Esto garantiza variedad: mano fuerte → raise probable pero no seguro
+  // Ejemplo: fuerte → raise 65%, call 25%, check 10%
+  const roll = Math.random();
+  let cumul = 0;
+  let chosenAction = canCheck ? 'check' : 'fold';
+  for(const [action, prob] of probs) {
+    cumul += prob;
+    if(roll < cumul) { chosenAction = action; break; }
+  }
+
+  // ── 8. Calcular tamaño del raise/bluff ───────────────────────
+  const phaseMulti = phase === 'preflop' ? 0.75 : phase === 'flop' ? 0.9 : phase === 'turn' ? 1.0 : 1.2;
+  const baseRaise = Math.max(currentBet * 2, currentBet + 20, 20);
+  const raiseSize = Math.min(
+    baseRaise + Math.floor(pot * (0.35 + effectiveAgg * 0.4) * phaseMulti),
+    p.chips + p.bet
+  );
+
+  const isBluff = chosenAction === 'bluff';
+  const finalAction = isBluff ? 'raise' : chosenAction;
+
+  return {
+    action: finalAction,
+    amount: raiseSize,
+    _mlProb: winProb,
+    _bluff: isBluff,
+    _combined: combined
+  };
+}
+
+function evaluateHandStrength(hand, community) {
+  // Devuelve 0.0 (muy débil) a 1.0 (muy fuerte)
+  // BUG ORIGINAL: con community cards usaba 0.05 + rank*0.11 → max 0.05+9*0.11=1.04
+  // pero en preflop el max era 0.5 → casi todo caía en bucket "weak" → fold excesivo
+  if(!hand || hand.length < 2) return 0.15;
+  const r1 = hand[0].value, r2 = hand[1].value;
+  const suited = hand[0].suit === hand[1].suit;
+  const gap = Math.abs(r1 - r2);
+  const highCard = Math.max(r1, r2);
+  const lowCard  = Math.min(r1, r2);
+
+  if(community.length > 0) {
+    // Post-flop: usar la mejor mano real evaluada
+    const best = getBestHandRank(hand, community);
+    // rank va de 0 (high card) a 9 (royal flush)
+    // Mapear a 0.15–1.0 para que haya siempre algo de acción
+    const postBase = 0.15 + best.rank * 0.095; // max: 0.15+9*0.095 = 1.005
+    // Bonus por cartas altas dentro de la mano
+    const highBonus = highCard >= 13 ? 0.04 : highCard >= 11 ? 0.02 : 0;
+    return Math.min(postBase + highBonus, 1.0);
+  }
+
+  // Pre-flop: heurística basada en valor de cartas
+  let base;
+  if(r1 === r2) {
+    // Par de bolsillo: muy fuerte
+    base = 0.52 + (r1 - 2) / 24; // 22=0.52 → AA=0.98
+  } else if(highCard === 14) {
+    // As + otra
+    base = lowCard >= 13 ? 0.72 : // AK
+           lowCard >= 11 ? 0.62 : // AQ, AJ
+           lowCard >= 9  ? 0.52 : // AT, A9
+                           0.42;  // A2-A8
+  } else if(highCard === 13) {
+    base = lowCard >= 12 ? 0.58 : // KQ
+           lowCard >= 10 ? 0.48 : // KJ, KT
+                           0.35;
+  } else if(highCard >= 11) {
+    base = lowCard >= 10 ? 0.44 : 0.32;
+  } else {
+    base = 0.22 + (highCard - 2) / 36; // cartas bajas: 0.22–0.36
+  }
+  if(suited) base += 0.04;   // suited es un bonus real
+  if(gap <= 1) base += 0.03; // conectores
+  return Math.min(base, 0.98);
+}
+
+function botAct(p) {
+  const decision = decideAction(p);
+  let action = decision.action;
+  let raiseAmount = decision.amount || (currentBet + 20);
+  raiseAmount = Math.min(raiseAmount, p.chips + p.bet, 10000);
+  if(action === 'check' && currentBet > p.bet) action = 'call';
+  if(action === 'raise' && p.chips === 0) action = 'call';
+  if(action === 'raise' && raiseAmount <= p.bet) action = 'call';
+  // Show ML reasoning in msg if ML bot
+  if(p.isML && decision._mlProb !== undefined) {
+    const conf = (decision._mlProb * 100).toFixed(0);
+    const tag = decision._bluff ? ' 🃏bluff' : decision._explore ? ' 🎲explora' : '';
+    setMsg(`🤖 Bot ML${tag}: ${action.toUpperCase()} | P(win): ${conf}%`);
+  }
+  executeAction(p, action, raiseAmount);
+}
+
+// ============================================================
+// SHOWDOWN
+// ============================================================
+function showdown() {
+  phase = 'showdown';
+  setPhaseLabel('Showdown');
+  setMsg('El Juez evalúa las manos...');
+  hideActionPanel();
+  gameRunning = false;
+  if(gameMode === 'host') broadcastGameState();
+  setTimeout(judgeWinner, 1000);
+}
+
+function judgeWinner() {
+  const active = players.filter(p => !p.folded);
+  if(active.length === 0) return;
+  if(active.length === 1) { declareWinner(active[0]); return; }
+
+  let bestRank = -1, winner = null, winnerResult = null;
+  active.forEach(p => {
+    const result = getBestHandRank(p.hand, communityCards);
+    if(result.rank > bestRank || (result.rank === bestRank && tieBreak(result, winnerResult) > 0)) {
+      bestRank = result.rank; winner = p; winnerResult = result;
+    }
+  });
+  showAllHands(active, winner);
+  declareWinner(winner, winnerResult);
+}
+
+function showAllHands(active, winner) {
+  // Clear community card area text (keep the card elements)
+  // Show bot hands visually inside the winner box grid
+  const grid = document.getElementById('winnerHandsGrid');
+  grid.innerHTML = '';
+
+  active.forEach(p => {
+    if(!p.hand || p.hand.length === 0) return;
+    const isWinner = p === winner;
+    const isMe = p.isHuman && (gameMode === 'local' || players.indexOf(p) === myPlayerId);
+
+    const row = document.createElement('div');
+    row.className = 'wh-row' + (isWinner ? ' is-winner' : '');
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'wh-name';
+    nameEl.textContent = (isWinner ? '🏆 ' : '') + p.name;
+    row.appendChild(nameEl);
+
+    const cardsEl = document.createElement('div');
+    cardsEl.className = 'wh-cards';
+    p.hand.forEach(c => {
+      const isRed = c.suit === '♥' || c.suit === '♦';
+      const card = document.createElement('div');
+      card.className = 'wh-card ' + (isRed ? 'red' : 'black');
+      card.innerHTML = `<span>${c.rank}</span><span>${c.suit}</span>`;
+      cardsEl.appendChild(card);
+    });
+    row.appendChild(cardsEl);
+
+    // Show hand rank name if we have community cards
+    if(communityCards.length > 0) {
+      const result = getBestHandRank(p.hand, communityCards);
+      const hn = document.createElement('div');
+      hn.className = 'wh-handname';
+      hn.textContent = HAND_NAMES[result.rank] || '';
+      row.appendChild(hn);
+    }
+
+    grid.appendChild(row);
+  });
+}
+
+function declareWinner(winner, handResult) {
+  winner.chips += pot;
+  if(mlKnowledge.winRates[winner.name] === undefined) mlKnowledge.winRates[winner.name] = 0;
+  mlKnowledge.winRates[winner.name]++;
+  mlKnowledge.raiseFreq = Math.min(mlKnowledge.raiseFreq + 0.02, 0.7);
+
+  // ── Update bot ML stats after hand ─────────────────────────
+  players.forEach(p => {
+    if(p.isHuman) return;
+    initBotStats(p.name);
+    const s = mlKnowledge.botStats[p.name];
+    s.hands++;
+    if(p === winner) {
+      s.wins++;
+      s.totalWon += pot;
+      // Winners get a tiny aggressiveness boost
+      s.aggressiveness = Math.min(1, s.aggressiveness + 0.03);
+    } else if(!p.folded) {
+      s.totalLost += (p.bet || 0);
+      // Non-folder losers get slightly more conservative
+      s.aggressiveness = Math.max(0.1, s.aggressiveness - 0.02);
+    } else {
+      // Folders: if they folded a lot, slight passivity reinforcement
+      s.aggressiveness = Math.max(0.1, s.aggressiveness - 0.01);
+    }
+  });
+
+  // ── Record ML samples for training ──────────────────────────
+  players.forEach(p => {
+    if(!p.isHuman) return; // only track human actions for ML dataset
+    // We track any player's hand data as samples
+  });
+  // Record ALL players' last hand state as ML samples
+  // (using their hand strength, pot situation at time of last action)
+  players.forEach(p => {
+    if(p.hand && p.hand.length >= 2) {
+      const hs = evaluateHandStrength(p.hand, communityCards);
+      const toCall = 0;
+      const po = pot > 0 ? toCall / (pot + toCall) : 0;
+      const lastAction = p._lastAction || 1; // 0=fold,1=call,2=raise
+      const didWin = p === winner ? 1 : 0;
+      addMLSample(hs, phase, po, pot, lastAction, didWin);
+    }
+  });
+
+  // Retrain every N rounds (no data leakage: only past data)
+  if(roundsPlayed - mlDataset.lastRetrain >= mlDataset.retrainInterval) {
+    mlDataset.lastRetrain = roundsPlayed;
+    retrainML();
+  }
+
+  // Track rounds with ML bot
+  if(players.find(p=>p.isML)) mlDataset.roundsWithBot++;
+
+  const overlay = document.getElementById('winnerOverlay');
+  const isMyWin = winner.isHuman && (gameMode === 'local' || players.indexOf(winner) === myPlayerId);
+  document.getElementById('winnerTitle').textContent = isMyWin ? '🏆 ¡Ganaste!' : (winner.isHuman ? `🏆 ¡Ganó ${winner.name}!` : '🃏 Ganó el Bot');
+  document.getElementById('winnerName').textContent = winner.name;
+  document.getElementById('winnerHand').textContent = handResult ? HAND_NAMES[handResult.rank] : 'Ganador por default';
+  document.getElementById('winnerPot').textContent = `Pozo ganado: $${pot}`;
+  overlay.style.display = 'flex';
+
+  gameRunning = false;
+  updateBankUI();
+  document.getElementById('roundsSpan').textContent = roundsPlayed;
+  // Show best bot winrate in ML bar
+  updateMLBar();
+}
+
+function updateMLBar() {
+  const mlBot = players.find(p=>p.isML);
+  const bots = players.filter(p=>!p.isHuman);
+  if(bots.length === 0) return;
+
+  const dsSize = mlDataset.all.length;
+  const trainA = mlDataset.trainAccuracy;
+  const valA   = mlDataset.valAccuracy;
+  const testA  = mlDataset.testAccuracy;
+  const state  = mlDataset.biasVarianceState;
+
+  // Dataset info — show 70/15/15 split + fase de aprendizaje
+  const totalSamples = mlDataset.all.length;
+  const heuristicThreshold = 20;
+  const phaseTag = totalSamples < heuristicThreshold
+    ? `<span style="color:#ffaa44">🌱 Fase heurística</span>`
+    : `<span style="color:#44ff88">🧠 ML activo</span>`;
+
+  if(totalSamples < 8) {
+    document.getElementById('mlStatsSpan').innerHTML = `Dataset: ${totalSamples} muestras (necesita 8+) ${phaseTag}`;
+  } else {
+    document.getElementById('mlStatsSpan').innerHTML =
+      `Split 70/15/15 → Train:${mlDataset.trainSet.length} Val:${mlDataset.valSet.length} Test:${mlDataset.testSet.length} ${phaseTag}`;
+  }
+
+  // Train / val / test accuracy
+  if(trainA > 0) {
+    document.getElementById('mlTrainSpan').textContent = `Train: ${(trainA*100).toFixed(1)}% | Val: ${(valA*100).toFixed(1)}%`;
+    document.getElementById('mlTestSpan').textContent  = `Test acc: ${(testA*100).toFixed(1)}%`;
+  } else {
+    document.getElementById('mlTrainSpan').textContent = `Train acc: —`;
+    document.getElementById('mlTestSpan').textContent  = `Test acc: —`;
+  }
+
+  // Bias-variance state
+  const stateEmoji = state === 'overfitting'  ? '⚠️ Overfitting'  :
+                     state === 'underfitting' ? '📉 Underfitting' : '✅ Balanceado';
+  document.getElementById('mlBiasSpan').textContent = `Estado: ${stateEmoji}`;
+
+  // ── NUEVO: Mostrar tasa de exploración dinámica ──────────────
+  const roundsWithBot = mlDataset.roundsWithBot || 0;
+  const currentEpsilon = Math.max(0.10, 0.40 - roundsWithBot * 0.02);
+  const exploreEl = document.getElementById('mlExploreSpan');
+  if(exploreEl) {
+    const explorePercent = Math.round(currentEpsilon * 100);
+    const exploreColor = currentEpsilon > 0.30 ? '#ff8866' : currentEpsilon > 0.18 ? '#ffcc66' : '#66ff88';
+    exploreEl.innerHTML = `Exploración: <span style="color:${exploreColor}">${explorePercent}%</span> ${currentEpsilon > 0.30 ? '🎲 (novato)' : currentEpsilon > 0.18 ? '📈 (mejorando)' : '🎯 (sólido)'}`;
+  }
+
+  // ── NUEVO: Barra de progreso del nivel ML ────────────────────
+  // 0 rondas → 0%, 15+ rondas → 100% (máximo en ronda 15)
+  const levelProgress = Math.min(100, Math.round((roundsWithBot / 15) * 100));
+  const barFill = document.getElementById('mlLevelBarFill');
+  if(barFill) {
+    barFill.style.width = levelProgress + '%';
+    // Color progresivo: rojo → amarillo → verde
+    const r = Math.round(255 * (1 - levelProgress/100));
+    const g = Math.round(180 * (levelProgress/100));
+    barFill.style.background = `linear-gradient(90deg, rgb(${r+40},${g},30), rgb(${r},${g+60},100))`;
+  }
+  const levelLabelEl = document.getElementById('mlLevelLabel');
+  if(levelLabelEl) {
+    if(roundsWithBot < 3)       levelLabelEl.textContent = '🔴 Novato — errores frecuentes';
+    else if(roundsWithBot < 7)  levelLabelEl.textContent = '🟠 Aprendiendo — mejorando';
+    else if(roundsWithBot < 12) levelLabelEl.textContent = '🟡 Intermedio — decisiones más sólidas';
+    else if(roundsWithBot < 15) levelLabelEl.textContent = '🟢 Avanzado — jugador competente';
+    else                        levelLabelEl.textContent = '🔵 Experto — ML dominante';
+  }
+
+  // ML Bot info if present
+  if(mlBot) {
+    const s = mlKnowledge.botStats[mlBot.name];
+    const wr = s && s.hands > 0 ? Math.round(s.wins/s.hands*100) : 0;
+    document.getElementById('mlStatsSpan').textContent +=
+      ` | Bot ML WR:${wr}%`;
+    // Track win rate history
+    if(s && s.hands > 0) mlHistory.winRateHistory.push(wr/100);
+    if(mlHistory.winRateHistory.length > 20) mlHistory.winRateHistory.shift();
+    drawWinRateChart();
+  }
+
+  // Log en consola para seguimiento
+  if(mlBot && roundsWithBot > 0) {
+    console.log(`[ML NIVEL] Rondas con bot: ${roundsWithBot} | Exploración: ${Math.round(currentEpsilon*100)}% | Progreso: ${levelProgress}%`);
+  }
+}
+
+// ============================================================
+// EVALUACIÓN DE MANOS
+// ============================================================
+function getBestHandRank(hand, community) {
+  const all = [...hand, ...community];
+  if(all.length < 5) { const r = simpleRank(all); return { rank: r, cards: all, kickers: [] }; }
+  const combos = combinations(all, 5);
+  let best = { rank: -1 };
+  combos.forEach(combo => {
+    const res = evaluate5(combo);
+    if(res.rank > best.rank || (res.rank === best.rank && tieBreak(res, best) > 0)) best = res;
+  });
+  return best;
+}
+function simpleRank(cards) {
+  const vals = cards.map(c=>c.value);
+  const counts = {};
+  vals.forEach(v => counts[v] = (counts[v]||0)+1);
+  const maxCount = Math.max(...Object.values(counts));
+  if(maxCount >= 4) return 7;
+  if(maxCount >= 3) return 3;
+  if(maxCount >= 2) return 1;
+  return 0;
+}
+function evaluate5(cards) {
+  const vals = cards.map(c=>c.value).sort((a,b)=>b-a);
+  const suits = cards.map(c=>c.suit);
+  const counts = {};
+  vals.forEach(v => counts[v] = (counts[v]||0)+1);
+  const freq = Object.values(counts).sort((a,b)=>b-a);
+  const isFlush = suits.every(s=>s===suits[0]);
+  const isStraight = checkStraight(vals);
+  let rank = 0;
+  if(isFlush && isStraight && vals[0]===14) rank = 9;
+  else if(isFlush && isStraight) rank = 8;
+  else if(freq[0]===4) rank = 7;
+  else if(freq[0]===3 && freq[1]===2) rank = 6;
+  else if(isFlush) rank = 5;
+  else if(isStraight) rank = 4;
+  else if(freq[0]===3) rank = 3;
+  else if(freq[0]===2 && freq[1]===2) rank = 2;
+  else if(freq[0]===2) rank = 1;
+  const grouped = Object.entries(counts).sort((a,b)=>b[1]-a[1]||b[0]-a[0]);
+  const kickers = grouped.flatMap(([v,c])=>Array(c).fill(parseInt(v)));
+  return { rank, kickers, cards };
+}
+function checkStraight(sortedVals) {
+  let ok = true;
+  for(let i=0; i<sortedVals.length-1; i++) { if(sortedVals[i]-sortedVals[i+1]!==1) { ok=false; break; } }
+  if(ok) return true;
+  const sv = [...sortedVals];
+  if(sv[0]===14) sv.push(1);
+  let ok2 = true;
+  const s = [5,4,3,2,1];
+  for(let i=0; i<5; i++) if(sv.indexOf(s[i])<0) { ok2=false; break; }
+  return ok2;
+}
+function tieBreak(a, b) {
+  if(!a || !b) return 0;
+  if(a.rank !== b.rank) return a.rank - b.rank;
+  for(let i=0; i<Math.min((a.kickers||[]).length,(b.kickers||[]).length); i++) {
+    if(a.kickers[i] !== b.kickers[i]) return a.kickers[i] - b.kickers[i];
+  }
+  return 0;
+}
+function combinations(arr, k) {
+  if(k===0) return [[]];
+  if(arr.length===0) return [];
+  const [first, ...rest] = arr;
+  return [...combinations(rest, k-1).map(c=>[first,...c]), ...combinations(rest, k)];
+}
+
+// ============================================================
+// UI HELPERS
+// ============================================================
+function setPhaseLabel(t) {
+  document.getElementById('phaseLabel').textContent = t;
+  document.getElementById('actionPhaseTag').textContent = t;
+}
+function setMsg(m) { document.getElementById('msgLabel').textContent = m; }
+function updateUI() {
+  document.getElementById('potLabel').textContent = `Pozo: $${pot}`;
+  updatePlayerLabels();
+}
+function updateBankUI() {
+  // In multi-local mode, show the currently acting human's bank
+  let pIdx = humanIndex;
+  if(humanIndices.length > 1 && players[actionIndex] && players[actionIndex].isHuman) {
+    pIdx = actionIndex;
+  }
+  const p = players[pIdx];
+  if(!p) return;
+  // Sync globalBank with the human player's bank (keep them in sync)
+  if(p.isHuman) globalBank = p.bank;
+  document.getElementById('bankAmount').textContent = p.bank;
+  document.getElementById('chipsAmount').textContent = p.chips;
+}
+
+function showPlayerHand() {
+  // Show the hand of the currently acting human (for multi-local mode)
+  let pIdx = humanIndex;
+  if(humanIndices.length > 1 && players[actionIndex] && players[actionIndex].isHuman) {
+    pIdx = actionIndex;
+  }
+  const p = players[pIdx];
+  let html = '';
+  (p.hand||[]).forEach(c => html += cardHTML(c));
+  document.getElementById('playerHand').innerHTML = html;
+}
+
+function updateCommunityCards() {
+  let html = '';
+  communityCards.forEach(c => html += cardHTML(c));
+  document.getElementById('communityCards').innerHTML = html;
+}
+
+function showActionPanel() {
+  const p = players[humanIndex];
+  const panel = document.getElementById('actionPanel');
+  panel.style.display = 'block';
+
+  const phaseNames = { preflop:'Pre-Flop', flop:'Flop 🃏', turn:'Turn 🃏', river:'River 🃏' };
+  document.getElementById('actionPhaseTag').textContent = phaseNames[phase] || phase;
+
+  const toCall = Math.max(0, currentBet - p.bet);
+  document.getElementById('btnCall').textContent = `Call $${toCall}`;
+  const btnCheck = document.getElementById('btnCheck');
+  btnCheck.textContent = currentBet === p.bet ? 'Check' : 'Check ✗';
+  btnCheck.disabled = currentBet !== p.bet;
+  btnCheck.style.opacity = currentBet === p.bet ? '1' : '0.4';
+
+  const minRaise = Math.max(currentBet + 20, currentBet * 2 || 20);
+  const slider = document.getElementById('raiseSlider');
+  slider.min = minRaise;
+  slider.max = p.chips + p.bet;
+  slider.value = Math.min(minRaise, p.chips + p.bet);
+  document.getElementById('raiseValue').textContent = `$${slider.value}`;
+  slider.oninput = () => document.getElementById('raiseValue').textContent = `$${slider.value}`;
+}
+function hideActionPanel() { document.getElementById('actionPanel').style.display = 'none'; }
+
+// ============================================================
+// BOT 6 - IA QUE APRENDE
+// ============================================================
+function addBot6() {
+  if(players.find(p=>p.isML)) return;
+
+  // ── Pre-load dataset con conocimiento heurístico de poker ──────────────────
+  //
+  // ¿POR QUÉ EL BOT ML ACTÚA RANDOM AL INICIO?
+  // ─────────────────────────────────────────────────────────────────────────
+  // En las primeras rondas, mlDataset.all.length < 8 → trainWeights() hace
+  // return temprano sin entrenar. El modelo usa los pesos iniciales (todos ~0)
+  // que hacen que mlPredict() devuelva ~0.5 para cualquier entrada.
+  // Con rawProb≈0.5 y softmax sobre scores similares, la decisión es casi
+  // aleatoria. Esto es CORRECTO desde la perspectiva de ML puro:
+  //   "Sin datos → sin aprendizaje → exploración aleatoria"
+  //
+  // PERO es frustrante para el usuario. La solución es un seed HEURÍSTICO:
+  // en lugar de datos completamente aleatorios, generamos muestras que
+  // reflejan la estrategia básica correcta de poker. Así el modelo arranca
+  // con pesos calibrados que enseñan:
+  //   - handStrength alto → acción agresiva → outcome positivo
+  //   - handStrength bajo → fold → pérdida pequeña
+  //   - potOdds alto → call menos conveniente
+  //
+  // La TRANSICIÓN heurística→ML ocurre gradualmente:
+  //   Rondas 1-5:  Bots normales + acumulación de datos reales
+  //   Ronda 5+:    Bot ML activo, usa seed heurístico como "conocimiento previo"
+  //   Rondas 8+:   Suficientes datos reales → trainWeights() funciona realmente
+  //   Rondas 15+:  ML domina; las muestras reales superan al seed heurístico
+  //   Epsilon=0.15: 15% random siempre → anti-overfitting por exploración
+  // ─────────────────────────────────────────────────────────────────────────
+  if(mlDataset.all.length === 0) {
+    const phases = ['preflop','flop','turn','river'];
+
+    // Función heurística: genera una muestra con lógica real de poker
+    function heuristicSample() {
+      const hs = 0.15 + Math.random() * 0.80; // rango real de handStrength
+      const ph = phases[Math.floor(Math.random() * 4)];
+      const po = Math.random() * 0.40;
+      const ps = 150 + Math.random() * 500;
+
+      // Acción basada en reglas de poker básicas — NO random puro:
+      // Mano fuerte (≥0.70) → raise casi siempre
+      // Mano media (0.45-0.70) con pot odds favorables → call
+      // Mano débil (<0.30) → fold (con variación para bluffs)
+      let action;
+      if(hs >= 0.70) {
+        action = Math.random() < 0.75 ? 2 : 1; // 75% raise, 25% call (no ser predecible)
+      } else if(hs >= 0.45) {
+        if(po < 0.22) action = Math.random() < 0.35 ? 2 : 1; // call o raise con pot odds ok
+        else action = Math.random() < 0.55 ? 1 : 0; // call o fold si pot odds malos
+      } else if(hs >= 0.28) {
+        action = Math.random() < 0.65 ? 0 : 1; // mayormente fold, algo de call
+      } else {
+        // Mano muy débil: casi siempre fold, bluff raro
+        action = Math.random() < 0.85 ? 0 : (Math.random() < 0.5 ? 2 : 0);
+      }
+
+      // Outcome correlacionado con hand strength + acción
+      // (más realista que random puro → modelo aprende causalidad)
+      let winProb = hs * 0.65;
+      if(action === 2) winProb += 0.12; // raise → más presión → gana más
+      if(action === 0) winProb = 0.05;  // fold → nunca gana el pot
+      if(ph === 'river') winProb -= 0.05; // river más incierto
+      const won = Math.random() < Math.max(0, Math.min(1, winProb)) ? 1 : 0;
+
+      // Simular frecuencias humanas realistas (no 0.0 que es el default)
+      const hRaise = 0.20 + Math.random() * 0.15;
+      const hFold  = 0.25 + Math.random() * 0.15;
+
+      const phaseNum = {preflop:0, flop:1, turn:2, river:3}[ph];
+      mlDataset.all.push({
+        handStrength: hs, phase: phaseNum,
+        potOdds: po, potSize: Math.min(ps/1000, 1),
+        humanRaiseFreq: hRaise, humanFoldFreq: hFold,
+        action, outcome: won
+      });
+    }
+
+    // Generar N muestras heurísticas según rondas jugadas
+    // (más rondas previas → más "experiencia" simulada)
+    const seedCount = Math.max(12, roundsPlayed * 2);
+    for(let i = 0; i < seedCount; i++) heuristicSample();
+
+    // Entrenar con el seed heurístico
+    splitDataset();
+    trainWeights();
+    mlDataset.trainAccuracy = computeAccuracy(mlDataset.trainSet, mlDataset.weights);
+    mlDataset.valAccuracy   = computeAccuracy(mlDataset.valSet,   mlDataset.weights);
+    mlDataset.testAccuracy  = computeAccuracy(mlDataset.testSet,  mlDataset.weights);
+    mlDataset.biasVarianceState = 'balanced';
+
+    // Log para transparencia — visible en consola del navegador
+    console.log(`[ML INIT] 🌱 Seed heurístico: ${seedCount} muestras con lógica básica de poker`);
+    console.log(`[ML INIT] Train:${mlDataset.trainSet.length} Val:${mlDataset.valSet.length} Test:${mlDataset.testSet.length}`);
+    console.log(`[ML INIT] Accuracy inicial → Train:${(mlDataset.trainAccuracy*100).toFixed(1)}% Val:${(mlDataset.valAccuracy*100).toFixed(1)}% Test:${(mlDataset.testAccuracy*100).toFixed(1)}%`);
+    console.log(`[ML INIT] Pesos aprendidos:`, JSON.stringify(
+      Object.fromEntries(Object.entries(mlDataset.weights).map(([k,v])=>[k, +v.toFixed(3)]))
+    ));
+    console.log(`[ML TRANSITION] Rondas 0-${roundsPlayed}: heurística base → a partir de ahora: ML ajusta sobre ella`);
+  }
+
+  players.push({
+    name: 'Bot ML 🧠', isHuman: false, isML: true,
+    chips: 1000, bank: 20000,
+    bet: 0, folded: false, hand: [],
+    mlLevel: 3, x: 0, z: 0
+  });
+  initBotStats('Bot ML 🧠');
+  buildPlayers();
+  updateMLBar();
+  document.getElementById('mlLevelSpan').textContent = 'Activo';
+  document.getElementById('mlPerfPanel').style.display = 'block';
+  drawMLChart();
+  setMsg(`🤖 Bot ML 🧠 se unió — seed heurístico: ${mlDataset.all.length} muestras | Comienza como NOVATO (40% random)`);
+  document.getElementById('addBot6Btn').style.display = 'none';
+  console.log(`[ML INIT] Bot ML agregado. Exploración inicial: 40% → reducirá 2% por ronda hasta 10%`);
+  console.log(`[ML INIT] Ronda  0-2: Novato (errores frecuentes)`);
+  console.log(`[ML INIT] Ronda  5-7: Aprendiendo (mejorando)`);
+  console.log(`[ML INIT] Ronda 10-12: Intermedio (decisiones sólidas)`);
+  console.log(`[ML INIT] Ronda 15+: Experto (ML dominante)`);
+}
+
+// ============================================================
+// NUEVA MANO
+// ============================================================
+function nextHand() {
+  document.getElementById('winnerOverlay').style.display = 'none';
+  // Note: card clearing is handled inside startHand → resetPlayerHands()
+  // to avoid duplicate clearing that could cause flash of old cards
+  setTimeout(startHand, 200); // ⚡ era 400ms
+}
+
+function createStartButton() {
+  const existing = document.getElementById('startBtn');
+  if(existing) existing.remove();
+  const btn = document.createElement('button');
+  btn.textContent = 'Nueva Mano';
+  btn.style.cssText = `position:fixed;bottom:60px;left:50%;transform:translateX(-50%);
+    padding:12px 36px;background:#d4a017;border:none;border-radius:8px;
+    font-size:16px;font-weight:bold;color:#000;cursor:pointer;z-index:150;pointer-events:all;`;
+  btn.id = 'startBtn';
+  btn.onclick = () => { btn.remove(); startHand(); };
+  document.body.appendChild(btn);
+  // Show exit button whenever the game is accessible
+  document.getElementById('exitRoomBtn').style.display = 'block';
+}
+
+// ============================================================
+// SALIR DE LA SALA — guarda ganancias en el banco global
+// ============================================================
+function exitRoom() {
+  // Calcular chips netas del jugador humano principal
+  const humanPlayer = players[humanIndex] || players.find(p => p.isHuman);
+  if(humanPlayer) {
+    // Guardar fichas actuales en el banco global
+    const chipsToBank = humanPlayer.chips;
+    globalBank += chipsToBank;
+    console.log(`[EXIT] Fichas guardadas: +${chipsToBank} | Nuevo banco: ${globalBank}`);
+  }
+
+  // Detener el juego
+  gameRunning = false;
+
+  // Limpiar UI de juego
+  const startBtn = document.getElementById('startBtn');
+  if(startBtn) startBtn.remove();
+  document.getElementById('winnerOverlay').style.display = 'none';
+  document.getElementById('actionPanel').style.display = 'none';
+  document.getElementById('exitRoomBtn').style.display = 'none';
+  document.getElementById('addBot6Btn').style.display = 'none';
+  document.getElementById('playerHand').innerHTML = '';
+  document.getElementById('communityCards').innerHTML = '';
+  document.getElementById('mlPerfPanel').style.display = 'none';
+  // Limpiar labels de jugadores
+  playerLabels.forEach(el => el.remove());
+  playerLabels = [];
+
+  // Resetear estado de partida (sin tocar globalBank)
+  deck = []; communityCards = []; pot = 0; currentBet = 0;
+  players = []; phase = 'waiting'; actionIndex = 0;
+
+  // Actualizar bank en el lobby input para que se vea al volver
+  // Mostrar pantalla del lobby con el banco actualizado
+  const lobbyOverlay = document.getElementById('lobbyOverlay');
+  lobbyOverlay.style.display = 'flex';
+
+  // Mostrar resumen de salida
+  showExitSummary(humanPlayer);
+}
+
+function showExitSummary(humanPlayer) {
+  const old = document.getElementById('exitSummaryModal');
+  if(old) old.remove();
+
+  const chipsGanados = humanPlayer ? humanPlayer.chips : 0;
+  const nuevoBank = globalBank;
+  const ganancia = chipsGanados; // lo que llevaba en fichas
+  const positivo = ganancia >= 0;
+
+  const modal = document.createElement('div');
+  modal.id = 'exitSummaryModal';
+  modal.style.cssText = `
+    position:fixed;top:0;left:0;width:100%;height:100%;
+    background:rgba(0,0,0,0.92);z-index:600;
+    display:flex;align-items:center;justify-content:center;`;
+  modal.innerHTML = `
+    <div style="
+      background:linear-gradient(160deg,#1c1400,#0e0b00);
+      border:2px solid ${positivo?'#d4a017':'#882222'};
+      border-radius:20px;padding:36px 44px;text-align:center;
+      max-width:420px;width:90%;
+      box-shadow:0 0 60px ${positivo?'rgba(212,160,23,0.25)':'rgba(180,30,30,0.25)'};
+      font-family:'Rajdhani',sans-serif;">
+      <div style="font-family:'Playfair Display',serif;color:${positivo?'#ffd060':'#ff8888'};
+        font-size:26px;margin-bottom:8px;">
+        ${positivo ? '🏦 ¡Retiro exitoso!' : '🚪 Saliendo de la sala'}
+      </div>
+      <div style="color:#888;font-size:13px;margin-bottom:20px;">Resumen de la sesión</div>
+      <div style="display:flex;gap:16px;justify-content:center;margin-bottom:20px;flex-wrap:wrap;">
+        <div style="background:rgba(255,255,255,0.04);border:1px solid #333;
+          border-radius:12px;padding:14px 20px;min-width:110px;">
+          <div style="color:#888;font-size:10px;margin-bottom:4px;letter-spacing:1px;">FICHAS GUARDADAS</div>
+          <div style="color:${positivo?'#44ff88':'#ff8888'};font-size:22px;font-weight:700;">
+            ${positivo?'+':''}$${chipsGanados}
+          </div>
+        </div>
+        <div style="background:rgba(212,160,23,0.06);border:1px solid #d4a017;
+          border-radius:12px;padding:14px 20px;min-width:110px;">
+          <div style="color:#888;font-size:10px;margin-bottom:4px;letter-spacing:1px;">NUEVO BANCO</div>
+          <div style="color:#ffd060;font-size:22px;font-weight:700;">$${nuevoBank}</div>
+        </div>
+      </div>
+      <div style="color:#666;font-size:11px;margin-bottom:20px;">
+        Rondas jugadas esta sesión: <b style="color:#aaa">${roundsPlayed}</b>
+      </div>
+      <button onclick="document.getElementById('exitSummaryModal').remove();"
+        style="padding:12px 36px;
+          background:linear-gradient(135deg,#d4a017,#8a6000);
+          border:none;border-radius:10px;color:#000;font-size:15px;
+          font-weight:700;cursor:pointer;letter-spacing:1px;
+          box-shadow:0 4px 20px rgba(212,160,23,0.4);
+          font-family:'Rajdhani',sans-serif;">
+        Volver al menú
+      </button>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+// ============================================================
+// INIT
+// ============================================================
+initThree();
+// Don't init players yet — wait for lobby
+document.getElementById('mlLevelSpan').textContent = mlLevel;
+document.getElementById('roundsSpan').textContent = roundsPlayed;
+
+// ⚡ Log de optimizaciones aplicadas — visible en DevTools Console
+console.log('%c[POKER ML v12] Optimizaciones activas:', 'color:#d4a017;font-weight:bold');
+console.log('  ✅ Sombras Three.js: DESACTIVADAS (renderer.shadowMap.enabled=false)');
+console.log('  ✅ Luces dinámicas: 9 → 4 (ahorra ~40% GPU shading)');
+console.log('  ✅ Segmentos geométricos: reducidos 40-60% en todos los meshes');
+console.log('  ✅ Pixel ratio limitado a 1.5 (era 2.0)');
+console.log('  ✅ Tone mapping: ACESFilmic → Linear');
+console.log('  ✅ Animate loop throttleado a ~50fps');
+console.log('  ✅ Player labels: cada 3 frames (era cada frame)');
+console.log('  ✅ backdrop-filter blur eliminado de actionPanel y winnerOverlay');
+console.log('  ✅ Bot thinking delay: 900-1500ms → 350-700ms');
+console.log('  ✅ ML seed: random puro → heurístico de poker real');
+console.log('%c[ML] El bot usará heurística hasta ~20 muestras reales, luego ML real', 'color:#4a9eff');
+</script>
+</body>
+</html>

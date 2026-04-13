@@ -1,88 +1,186 @@
 const express = require("express");
-const http = require("http");
+const http    = require("http");
 const { Server } = require("socket.io");
 
-const app = express();
+const app    = express();
 const server = http.createServer(app);
 
 app.use(express.static(__dirname));
-
-app.get("/", (req, res) => {
-  res.sendFile(__dirname + "/index.html");
-});
+app.get("/", (req, res) => res.sendFile(__dirname + "/index.html"));
 
 const io = new Server(server, {
-  cors: { origin: "*" }
+  cors: { origin: "*" },
+  // Permite reconexiones rápidas sin perder la sala
+  pingTimeout: 30000,
+  pingInterval: 10000,
 });
 
-// 🔥 guardar salas
+// ── Estructura de sala ──────────────────────────────────────────────────────
+// rooms[roomId] = {
+//   players:   [{ socketId, playerId, name }],   // orden = índice de asiento
+//   started:   bool,
+//   gameState: object | null,                     // último estado del host
+// }
 const rooms = {};
 
+// ── Helpers ─────────────────────────────────────────────────────────────────
+function getRoomOfSocket(socketId) {
+  for (const [roomId, room] of Object.entries(rooms)) {
+    if (room.players.some(p => p.socketId === socketId)) return roomId;
+  }
+  return null;
+}
+
+// ── Conexión ─────────────────────────────────────────────────────────────────
 io.on("connection", (socket) => {
-  console.log("Usuario conectado:", socket.id);
+  console.log("[+] Conectado:", socket.id);
 
-  // 🟢 CREAR SALA
- socket.on("createRoom", (roomId) => {
-  socket.join(roomId);
+  // ── CREAR SALA ────────────────────────────────────────────────────────────
+  // Cliente emite: { roomId, name }
+  socket.on("createRoom", ({ roomId, name }) => {
+    if (rooms[roomId]) {
+      socket.emit("error", "La sala ya existe. Probá con otro código.");
+      return;
+    }
 
-  rooms[roomId] = {
-    players: [socket.id]
-  };
+    rooms[roomId] = { players: [], started: false, gameState: null };
 
-  // 🔥 enviar estado inicial
-  io.to(roomId).emit("playersUpdate", rooms[roomId].players);
-});
+    const playerId = 0; // host siempre es el jugador 0
+    rooms[roomId].players.push({ socketId: socket.id, playerId, name });
+    socket.join(roomId);
 
-  // 🟢 UNIRSE A SALA
-  socket.on("joinRoom", (roomId) => {
-  socket.join(roomId);
+    console.log(`[SALA] Creada: ${roomId} por ${name} (${socket.id})`);
 
-  if (!rooms[roomId]) {
-    rooms[roomId] = { players: [] };
-  }
-
-  // evitar duplicados
-  if (!rooms[roomId].players.includes(socket.id)) {
-    rooms[roomId].players.push(socket.id);
-  }
-
-  console.log("Jugador unido a:", roomId);
-
-  // 🔥 MANDAR ESTADO A TODOS (incluido host)
-  io.to(roomId).emit("playersUpdate", rooms[roomId].players);
-});
-
-  // 🟢 INICIAR PARTIDA
-  socket.on("startGame", (roomId) => {
-    const room = rooms[roomId];
-
-    if (!room) return;
-
-    console.log("Iniciando partida en:", roomId);
-
-    // 🔥 enviar a TODOS los jugadores de la sala
-    io.to(roomId).emit("gameStarted", {
-      players: room.players
+    // Confirmar al host su playerId y la lista de jugadores
+    socket.emit("roomJoined", {
+      playerId,
+      players: rooms[roomId].players.map(p => ({ id: p.playerId, name: p.name })),
     });
   });
 
-  // 🔴 DESCONECTAR
-  socket.on("disconnect", () => {
-    console.log("Usuario desconectado:", socket.id);
+  // ── UNIRSE A SALA ─────────────────────────────────────────────────────────
+  // Cliente emite: { roomId, name }
+  socket.on("joinRoom", ({ roomId, name }) => {
+    const room = rooms[roomId];
+    if (!room) {
+      socket.emit("error", `No existe la sala ${roomId}.`);
+      return;
+    }
+    if (room.started) {
+      socket.emit("error", "La partida ya comenzó.");
+      return;
+    }
+    if (room.players.length >= 6) {
+      socket.emit("error", "La sala está llena (máx. 6).");
+      return;
+    }
 
-    // sacar jugador de salas
-    for (let roomId in rooms) {
-      rooms[roomId].players = rooms[roomId].players.filter(
-        (id) => id !== socket.id
-      );
+    const playerId = room.players.length;
+    room.players.push({ socketId: socket.id, playerId, name });
+    socket.join(roomId);
+
+    console.log(`[SALA] ${name} se unió a ${roomId} como jugador ${playerId}`);
+
+    // Confirmar al recién unido
+    socket.emit("roomJoined", {
+      playerId,
+      players: room.players.map(p => ({ id: p.playerId, name: p.name })),
+    });
+
+    // Notificar a TODOS (incluido host) la lista actualizada
+    io.to(roomId).emit("playersUpdate", {
+      players: room.players.map(p => ({ id: p.playerId, name: p.name })),
+    });
+  });
+
+  // ── INICIAR PARTIDA (solo el host la envía) ───────────────────────────────
+  // Cliente emite: { roomId }
+  socket.on("startGame", ({ roomId }) => {
+    const room = rooms[roomId];
+    if (!room) return;
+
+    const sender = room.players.find(p => p.socketId === socket.id);
+    if (!sender || sender.playerId !== 0) {
+      socket.emit("error", "Solo el host puede iniciar la partida.");
+      return;
+    }
+
+    room.started = true;
+    console.log(`[JUEGO] Partida iniciada en ${roomId} con ${room.players.length} jugadores`);
+
+    // Avisar a TODOS — cada cliente arranca con su playerId
+    room.players.forEach(p => {
+      io.to(p.socketId).emit("gameStarted", {
+        players: room.players.map(q => ({ id: q.playerId, name: q.name })),
+        myPlayerId: p.playerId,
+      });
+    });
+  });
+
+  // ── BROADCAST ESTADO (solo el host lo envía) ──────────────────────────────
+  // El host calcula el estado del juego y lo difunde a los clientes.
+  // Cliente emite: { roomId, state }
+  socket.on("gameState", ({ roomId, state }) => {
+    const room = rooms[roomId];
+    if (!room) return;
+
+    const sender = room.players.find(p => p.socketId === socket.id);
+    if (!sender || sender.playerId !== 0) return; // solo el host
+
+    room.gameState = state; // guardar último estado (por si alguien reconecta)
+
+    // Reenviar a todos los clientes EXCEPTO al host
+    socket.to(roomId).emit("gameState", state);
+  });
+
+  // ── ACCIÓN DE JUGADOR (cliente → host) ────────────────────────────────────
+  // Cuando es el turno de un cliente, éste envía su acción al servidor
+  // y el servidor la retransmite al host para que la procese.
+  // Cliente emite: { roomId, playerId, action, raiseAmount }
+  socket.on("playerAction", ({ roomId, playerId, action, raiseAmount }) => {
+    const room = rooms[roomId];
+    if (!room || !room.started) return;
+
+    const sender = room.players.find(p => p.socketId === socket.id);
+    if (!sender || sender.playerId !== playerId) {
+      console.warn(`[ACCIÓN] Rechazada: ${socket.id} dice ser jugador ${playerId} pero es ${sender?.playerId}`);
+      return;
+    }
+
+    console.log(`[ACCIÓN] Jugador ${playerId} en ${roomId}: ${action} ${raiseAmount ?? ''}`);
+
+    // Reenviar SOLO al host (jugador 0)
+    const host = room.players.find(p => p.playerId === 0);
+    if (host) {
+      io.to(host.socketId).emit("playerAction", { playerId, action, raiseAmount, _ts: Date.now() });
+    }
+  });
+
+  // ── DESCONEXIÓN ───────────────────────────────────────────────────────────
+  socket.on("disconnect", () => {
+    console.log("[-] Desconectado:", socket.id);
+    const roomId = getRoomOfSocket(socket.id);
+    if (!roomId) return;
+
+    const room = rooms[roomId];
+    const player = room.players.find(p => p.socketId === socket.id);
+
+    room.players = room.players.filter(p => p.socketId !== socket.id);
+
+    if (room.players.length === 0) {
+      delete rooms[roomId];
+      console.log(`[SALA] Sala ${roomId} eliminada (sin jugadores)`);
+    } else {
+      // Notificar al resto
+      io.to(roomId).emit("playerLeft", {
+        playerId: player?.playerId,
+        name: player?.name,
+        players: room.players.map(p => ({ id: p.playerId, name: p.name })),
+      });
     }
   });
 });
 
 const PORT = process.env.PORT || 3000;
-
-server.listen(PORT, () => {
-  console.log("Servidor corriendo en puerto", PORT);
-});
-
+server.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
 

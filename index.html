@@ -624,6 +624,8 @@ body::before {
 }
 
 </style>
+<!-- Socket.IO client — provisto por el servidor Render -->
+<script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
 
@@ -1177,301 +1179,171 @@ let lastRaiser = -1;
 let bettingRoundStart = -1; // actionIndex at which current betting round started
 
 // ============================================================
-// ONLINE / MULTIPLAYER — Firebase Realtime Database
-// Funciona entre dispositivos distintos, distintas redes, Chrome ✓
+// ONLINE / MULTIPLAYER — Socket.IO (Render server)
 // ============================================================
-let gameMode = 'local'; // 'local' | 'host' | 'client'
-let roomId = null;
-let myPlayerId = null;
-let myPlayerName = 'Jugador';
-let isHost = false;
-let onlinePlayerCount = 1;
+// Arquitectura:
+//   host   (gameMode='host')   → crea sala, corre la lógica del juego,
+//                                 broadcastea estado con socket.emit('gameState')
+//   client (gameMode='client') → recibe estado, envía acciones al servidor
+//                                 el servidor las retransmite al host
+//
+// Eventos cliente → servidor:
+//   createRoom  { roomId, name }
+//   joinRoom    { roomId, name }
+//   startGame   { roomId }
+//   gameState   { roomId, state }       ← solo el host
+//   playerAction { roomId, playerId, action, raiseAmount }
+//
+// Eventos servidor → cliente:
+//   roomJoined  { playerId, players }
+//   playersUpdate { players }
+//   gameStarted { players, myPlayerId }
+//   gameState   state
+//   playerAction { playerId, action, raiseAmount, _ts }
+//   playerLeft  { playerId, name, players }
+//   error       string
+// ============================================================
+
+let socket = null;
+
+function getSocket() {
+  if (socket) return socket;
+  // Conectar al mismo origen (Render sirve tanto el HTML como Socket.IO)
+  socket = io({ transports: ['websocket', 'polling'] });
+
+  socket.on('connect', () => {
+    console.log('[Socket.IO] Conectado. ID:', socket.id);
+  });
+  socket.on('disconnect', () => {
+    console.warn('[Socket.IO] Desconectado del servidor');
+    setOnlineStatus('disconnected');
+  });
+  socket.on('connect_error', (e) => {
+    console.error('[Socket.IO] Error de conexión:', e.message);
+  });
+  socket.on('error', (msg) => {
+    console.error('[Socket.IO] Error del servidor:', msg);
+    document.getElementById('waitingMsg').innerHTML = '<b>❌ ' + msg + '</b>';
+  });
+
+  return socket;
+}
+
+// ── Wrappers de compatibilidad (mantienen la API interna del juego) ──
+// El juego internamente usa fbSet/fbGet/fbListen/fbPatch para sincronizar
+// estado. Los reemplazamos para que en vez de usar P2P usen Socket.IO.
+// roomStore sigue siendo la fuente de verdad en el host.
+
+let roomStore = {};
+let fbListeners = {};
 let onlinePollInterval = null;
-let bc = null; // kept for compat, unused in Firebase mode
-
-// ============================================================
-// BACKEND RELAY — PeerJS + localStorage cross-tab fallback
-// ============================================================
-// Estrategia multicapa para multijugador sin Firebase:
-//
-// CAPA 1 — PeerJS (WebRTC P2P real):
-//   Funciona entre distintos dispositivos en internet.
-//   El servidor de señalización es peerjs.com (gratuito, sin cuenta).
-//   Una vez conectados, los datos viajan directo entre peers (sin servidor).
-//
-// CAPA 2 — BroadcastChannel (misma pestaña/dispositivo):
-//   Si PeerJS falla (offline, firewall), usamos BroadcastChannel para
-//   comunicar pestañas del mismo navegador. Útil para pruebas locales.
-//
-// CAPA 3 — Sala simulada (cualquier entorno):
-//   Si todo falla, la sala funciona en modo local (vs bots).
-//   Nunca se bloquea.
-// ============================================================
-
-// ── Variables de conexión ─────────────────────────────────────────────────────
-let peer = null;          // PeerJS local peer
-let hostConn = null;      // conexión al host (si soy client)
-let clientConns = [];     // conexiones a clients (si soy host)
-let peerReady = false;
 let fbEventSource = null; // kept for compat
 
-// ── PeerJS loader ─────────────────────────────────────────────────────────────
-function loadPeerJS(callback) {
-  if(window.Peer) { callback(); return; }
-  const s = document.createElement('script');
-  s.src = 'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js';
-  s.onload = () => { console.log('[P2P] PeerJS cargado'); callback(); };
-  s.onerror = () => { console.warn('[P2P] PeerJS no disponible'); callback(true); };
-  document.head.appendChild(s);
-}
-
-// ── Broadcast Channel (fallback mismo dispositivo) ────────────────────────────
-let bcChannel = null;
-function getBroadcastChannel(roomCode) {
-  if(!window.BroadcastChannel) return null;
-  return new BroadcastChannel('poker_room_' + roomCode);
-}
-
-// ── API pública — misma interfaz que Firebase para no cambiar el resto del código ──
-
-// roomStore: almacena el estado de sala en memoria (host lo mantiene)
-let roomStore = {};
-
 async function fbSet(path, data) {
-  // Escribe en roomStore (host) y retransmite a peers
-  const parts = path.split('/');
-  let node = roomStore;
-  for(let i = 0; i < parts.length - 1; i++) {
-    if(!node[parts[i]]) node[parts[i]] = {};
-    node = node[parts[i]];
-  }
-  node[parts[parts.length - 1]] = data;
-
-  // Retransmitir a clients P2P conectados
-  _broadcastToPeers({ type: 'fbSet', path, data });
-  // Retransmitir via BroadcastChannel (mismo dispositivo)
-  if(bcChannel) bcChannel.postMessage({ type: 'fbSet', path, data });
-
-  return true; // nunca falla — es local
+  _setInStore(path, data);
+  _notifyListeners(path);
+  return true;
 }
 
 async function fbPatch(path, data) {
-  // Merge en roomStore
   const parts = path.split('/');
   let node = roomStore;
-  for(let i = 0; i < parts.length - 1; i++) {
-    if(!node[parts[i]]) node[parts[i]] = {};
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (!node[parts[i]]) node[parts[i]] = {};
     node = node[parts[i]];
   }
   const key = parts[parts.length - 1];
   node[key] = Object.assign({}, node[key] || {}, data);
-
-  _broadcastToPeers({ type: 'fbPatch', path, data });
-  if(bcChannel) bcChannel.postMessage({ type: 'fbPatch', path, data });
-
+  _notifyListeners(path);
   return true;
 }
 
 async function fbGet(path) {
-  // Lee de roomStore — si soy client, pido al host via P2P
-  if(gameMode === 'client') {
-    return await _requestFromHost('fbGet', path);
-  }
-  const parts = path.split('/');
-  let node = roomStore;
-  for(const p of parts) {
-    if(node == null || typeof node !== 'object') return null;
-    node = node[p];
-  }
-  return node !== undefined ? node : null;
+  return _getFromStore(path);
 }
 
 async function fbDelete(path) {
   const parts = path.split('/');
   let node = roomStore;
-  for(let i = 0; i < parts.length - 1; i++) {
-    if(!node[parts[i]]) return;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (!node[parts[i]]) return;
     node = node[parts[i]];
   }
   delete node[parts[parts.length - 1]];
-  _broadcastToPeers({ type: 'fbDelete', path });
-  if(bcChannel) bcChannel.postMessage({ type: 'fbDelete', path });
 }
 
-// ── Listeners (reemplaza SSE de Firebase) ────────────────────────────────────
-let fbListeners = {}; // path → callback
 function fbListen(path, callback) {
   fbListeners[path] = callback;
-  // Si soy host, la primera llamada puede traer datos existentes
   const current = _getFromStore(path);
-  if(current) setTimeout(() => callback(current), 0);
+  if (current) setTimeout(() => callback(current), 0);
 }
+
 function stopFbListen() {
   fbListeners = {};
-  if(onlinePollInterval) { clearInterval(onlinePollInterval); onlinePollInterval = null; }
-  if(fbEventSource) { fbEventSource.close(); fbEventSource = null; }
+  if (onlinePollInterval) { clearInterval(onlinePollInterval); onlinePollInterval = null; }
+}
+
+function _setInStore(path, data) {
+  const parts = path.split('/');
+  let node = roomStore;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (!node[parts[i]]) node[parts[i]] = {};
+    node = node[parts[i]];
+  }
+  node[parts[parts.length - 1]] = data;
 }
 
 function _getFromStore(path) {
   const parts = path.split('/');
   let node = roomStore;
-  for(const p of parts) {
-    if(node == null || typeof node !== 'object') return null;
+  for (const p of parts) {
+    if (node == null || typeof node !== 'object') return null;
     node = node[p];
   }
   return node !== undefined ? node : null;
 }
 
-// ── Notificar listeners cuando cambia un path ─────────────────────────────────
 function _notifyListeners(path) {
-  for(const [listenPath, cb] of Object.entries(fbListeners)) {
-    if(path.startsWith(listenPath) || listenPath.startsWith(path)) {
+  for (const [listenPath, cb] of Object.entries(fbListeners)) {
+    if (path.startsWith(listenPath) || listenPath.startsWith(path)) {
       const val = _getFromStore(listenPath);
-      if(val !== null) cb(val);
+      if (val !== null) cb(val);
     }
   }
 }
 
-// ── Aplicar mensaje entrante (fbSet/fbPatch/fbDelete) ─────────────────────────
-function _applyMessage(msg) {
-  if(!msg || !msg.type) return;
-  if(msg.type === 'fbSet') {
-    const parts = msg.path.split('/');
-    let node = roomStore;
-    for(let i = 0; i < parts.length - 1; i++) {
-      if(!node[parts[i]]) node[parts[i]] = {};
-      node = node[parts[i]];
-    }
-    node[parts[parts.length - 1]] = msg.data;
-    _notifyListeners(msg.path);
-  } else if(msg.type === 'fbPatch') {
-    const parts = msg.path.split('/');
-    let node = roomStore;
-    for(let i = 0; i < parts.length - 1; i++) {
-      if(!node[parts[i]]) node[parts[i]] = {};
-      node = node[parts[i]];
-    }
-    const key = parts[parts.length - 1];
-    node[key] = Object.assign({}, node[key] || {}, msg.data);
-    _notifyListeners(msg.path);
-  } else if(msg.type === 'fbDelete') {
-    const parts = msg.path.split('/');
-    let node = roomStore;
-    for(let i = 0; i < parts.length - 1; i++) {
-      if(!node[parts[i]]) return;
-      node = node[parts[i]];
-    }
-    delete node[parts[parts.length - 1]];
-    _notifyListeners(msg.path);
-  } else if(msg.type === 'fbGetResponse') {
-    // Respuesta a un fbGet solicitado por client
-    if(msg._resolve) msg._resolve(msg.data);
-  }
-}
-
-// ── Broadcast a todos los clients P2P ────────────────────────────────────────
-function _broadcastToPeers(msg) {
-  clientConns.forEach(conn => {
-    try { conn.send(msg); } catch(e) {}
+async function writeAction(actionData) {
+  if (!roomId || !socket) return;
+  socket.emit('playerAction', {
+    roomId,
+    playerId: actionData.playerId,
+    action: actionData.action,
+    raiseAmount: actionData.raiseAmount,
   });
 }
 
-// ── Request sincrono al host (client pide datos) ─────────────────────────────
-const _pendingRequests = {};
-async function _requestFromHost(type, path) {
-  if(!hostConn || !hostConn.open) {
-    // Sin conexión P2P → leer de roomStore local (puede estar desactualizado)
-    return _getFromStore(path);
-  }
-  return new Promise((resolve) => {
-    const reqId = Date.now() + Math.random();
-    _pendingRequests[reqId] = resolve;
-    try { hostConn.send({ type, path, reqId }); } catch(e) { resolve(null); }
-    setTimeout(() => { if(_pendingRequests[reqId]) { delete _pendingRequests[reqId]; resolve(null); }}, 3000);
-  });
+async function broadcastGameState() {
+  if (gameMode !== 'host' || !roomId || !socket) return;
+  const state = buildGameStateSnapshot();
+  socket.emit('gameState', { roomId, state });
+  // También actualizar roomStore local (para fbGet)
+  await fbSet(`rooms/${roomId}/gameState`, state);
 }
 
-// ── Setup PeerJS como HOST ────────────────────────────────────────────────────
-function setupPeerHost(roomCode, onReady) {
-  loadPeerJS((err) => {
-    if(err || !window.Peer) {
-      console.warn('[P2P] PeerJS no disponible, usando modo local');
-      onReady(false); return;
-    }
-    try {
-      // El host usa el código de sala como peer ID (con prefijo para evitar colisiones)
-      peer = new Peer('poker-host-' + roomCode, {
-        debug: 0,
-        config: { iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' }
-        ]}
-      });
-      peer.on('open', (id) => {
-        console.log('[P2P] Host P2P listo. ID:', id);
-        peerReady = true;
-        onReady(true);
-      });
-      peer.on('connection', (conn) => {
-        console.log('[P2P] Cliente conectado:', conn.peer);
-        clientConns.push(conn);
-        conn.on('data', (msg) => {
-          // Client solicita datos
-          if(msg.type === 'fbGet') {
-            const data = _getFromStore(msg.path);
-            conn.send({ type: 'fbGetResponse', data, reqId: msg.reqId });
-          } else {
-            _applyMessage(msg); // client envía acciones
-          }
-        });
-        conn.on('close', () => {
-          clientConns = clientConns.filter(c => c !== conn);
-        });
-      });
-      peer.on('error', (e) => {
-        console.warn('[P2P] Error PeerJS host:', e.type);
-        if(!peerReady) onReady(false);
-      });
-      // Timeout por si PeerJS tarda demasiado
-      setTimeout(() => { if(!peerReady) { console.warn('[P2P] Timeout PeerJS'); onReady(false); }}, 5000);
-    } catch(e) {
-      console.warn('[P2P] Excepción PeerJS:', e); onReady(false);
-    }
-  });
+function generateRoomId() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let id = '';
+  for (let i = 0; i < 6; i++) id += chars[Math.floor(Math.random() * chars.length)];
+  return id;
 }
 
-// ── Setup PeerJS como CLIENT ──────────────────────────────────────────────────
-function setupPeerClient(roomCode, onReady) {
-  loadPeerJS((err) => {
-    if(err || !window.Peer) { onReady(false); return; }
-    try {
-      peer = new Peer({ debug: 0 });
-      peer.on('open', () => {
-        const hostId = 'poker-host-' + roomCode;
-        hostConn = peer.connect(hostId, { reliable: true });
-        hostConn.on('open', () => {
-          console.log('[P2P] Conectado al host:', hostId);
-          onReady(true);
-        });
-        hostConn.on('data', (msg) => {
-          if(msg.type === 'fbGetResponse' && _pendingRequests[msg.reqId]) {
-            _pendingRequests[msg.reqId](msg.data);
-            delete _pendingRequests[msg.reqId];
-          } else {
-            _applyMessage(msg);
-          }
-        });
-        hostConn.on('close', () => { console.warn('[P2P] Desconectado del host'); });
-        hostConn.on('error', (e) => { console.warn('[P2P] Error conexión host:', e); onReady(false); });
-      });
-      peer.on('error', (e) => { console.warn('[P2P] Error PeerJS client:', e.type); onReady(false); });
-      setTimeout(() => { if(!hostConn || !hostConn.open) onReady(false); }, 6000);
-    } catch(e) { console.warn('[P2P] Excepción PeerJS client:', e); onReady(false); }
-  });
+function buildInviteUrl() {
+  if (!roomId) return window.location.href;
+  const base = window.location.origin + window.location.pathname;
+  return base + '?room=' + roomId;
 }
 
-// Dummy FB_URL kept so error messages compile
-const FB_URL = '(P2P local — sin Firebase)';
+
 
 function generateRoomId() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -1650,186 +1522,91 @@ async function createOnlineRoom(name) {
 
   setOnlineStatus('connecting');
   document.getElementById('waitingMsg').style.display = 'block';
-  document.getElementById('waitingMsg').textContent = '⏳ Iniciando sala P2P...';
+  document.getElementById('waitingMsg').textContent = '⏳ Conectando al servidor...';
 
-  console.log('[Crear Sala] Iniciando con sistema P2P. Código:', roomId);
-  console.log('[Crear Sala] navigator.onLine =', navigator.onLine, '(informativo)');
+  const sock = getSocket();
 
-  // Inicializar roomStore con datos de sala
-  const roomData = {
-    host: name,
-    players: [{ id: 0, name, ready: true }],
-    started: false,
-    gameState: null,
-    action: null,
-    _ts: Date.now()
-  };
-  await fbSet('rooms/' + roomId, roomData); // escribe en roomStore local (siempre OK)
-
-  // Configurar BroadcastChannel para jugadores en el mismo dispositivo
-  bcChannel = getBroadcastChannel(roomId);
-  if(bcChannel) {
-    bcChannel.onmessage = (e) => { _applyMessage(e.data); };
-    console.log('[Crear Sala] BroadcastChannel activo para sala', roomId);
-  }
-
-  // Intentar P2P via PeerJS (para jugadores en distintos dispositivos)
-  document.getElementById('waitingMsg').textContent = '⏳ Configurando conexión P2P...';
-  setupPeerHost(roomId, (p2pOk) => {
-    if(p2pOk) {
-      console.log('[Crear Sala] ✅ P2P activo — otros dispositivos pueden unirse con el código');
-      setOnlineStatus('connected', `Sala ${roomId} — P2P activo`);
-    } else {
-      console.warn('[Crear Sala] P2P no disponible. La sala funciona en este dispositivo (modo local).');
-      setOnlineStatus('connected', `Sala ${roomId} — local`);
-    }
-  });
-
-  // Mostrar UI de sala (siempre, independientemente del P2P)
-  // Actualizar URL con el código de sala (soporta ambos formatos)
-  if(window.location.protocol === 'file:') {
-    window.location.hash = 'room=' + roomId; // file:// solo soporta hash
-  } else {
+  // Escuchar confirmación de sala creada
+  sock.once('roomJoined', ({ playerId, players }) => {
+    myPlayerId = playerId; // siempre 0 para el host
     const newUrl = window.location.origin + window.location.pathname + '?room=' + roomId;
     window.history.replaceState({}, '', newUrl);
-  }
-  console.log('[Crear Sala] URL actualizada. Código:', roomId, '| Link:', buildInviteUrl());
-  document.getElementById('roomCodeDisplay').textContent = roomId;
-  document.getElementById('roomInfo').style.display = 'block';
-  document.getElementById('waitingMsg').style.display = 'block';
-  document.getElementById('waitingMsg').textContent = '⏳ Esperando jugadores...';
-  document.getElementById('lobbyStartBtn').textContent = 'Iniciar Partida';
-  document.getElementById('lobbyStartBtn').onclick = startHostGame;
-  updateRoomPlayersList([{ name }]);
-
-  // Mostrar link de invitación en la UI
-  const linkEl = document.getElementById('roomLinkDisplay');
-  if(linkEl) {
-    const inviteUrl = buildInviteUrl();
-    linkEl.textContent = '🔗 ' + inviteUrl;
-    console.log('[Crear Sala] Room ID:', roomId);
-    console.log('[Crear Sala] Link de invitación:', inviteUrl);
-    console.log('[Crear Sala] Entrando a sala:', roomId);
-  }
-
-  // Escuchar cambios en la lista de jugadores
-  fbListen('rooms/' + roomId + '/players', (playersData) => {
-    if(!playersData) return;
-    const pls = Array.isArray(playersData) ? playersData : Object.values(playersData);
-    updateRoomPlayersList(pls);
-    const cnt = document.getElementById('waitingCount');
-    if(cnt) cnt.textContent = pls.length;
-    onlinePlayerCount = pls.length;
-    setOnlineStatus('connected', `Sala ${roomId} — ${pls.length} jugador(es)`);
+    document.getElementById('roomCodeDisplay').textContent = roomId;
+    document.getElementById('roomInfo').style.display = 'block';
+    document.getElementById('waitingMsg').textContent = '⏳ Esperando jugadores...';
+    document.getElementById('lobbyStartBtn').textContent = 'Iniciar Partida';
+    document.getElementById('lobbyStartBtn').onclick = startHostGame;
+    const linkEl = document.getElementById('roomLinkDisplay');
+    if (linkEl) linkEl.textContent = '🔗 ' + buildInviteUrl();
+    updateRoomPlayersList(players);
+    setOnlineStatus('connected', `Sala ${roomId} — 1 jugador`);
+    console.log('[Crear Sala] ✅ Sala creada:', roomId);
   });
+
+  // Escuchar cuando se unen nuevos jugadores
+  sock.on('playersUpdate', ({ players }) => {
+    updateRoomPlayersList(players);
+    const cnt = document.getElementById('waitingCount');
+    if (cnt) cnt.textContent = players.length;
+    setOnlineStatus('connected', `Sala ${roomId} — ${players.length} jugador(es)`);
+  });
+
+  sock.emit('createRoom', { roomId, name });
 }
 
 async function joinOnlineRoom(name, code) {
-  setOnlineStatus('connecting');
-  document.getElementById('waitingMsg').style.display = 'block';
-  document.getElementById('waitingMsg').textContent = '⏳ Conectando a sala ' + code + '...';
-  console.log('[Unirse] Intentando conectar a sala:', code);
-
-  roomId = code;
+  roomId = code.toUpperCase();
   isHost = false;
   gameMode = 'client';
 
-  // Configurar BroadcastChannel (mismo dispositivo)
-  bcChannel = getBroadcastChannel(roomId);
-  if(bcChannel) {
-    bcChannel.onmessage = (e) => { _applyMessage(e.data); };
-  }
+  setOnlineStatus('connecting');
+  document.getElementById('waitingMsg').style.display = 'block';
+  document.getElementById('waitingMsg').textContent = '⏳ Conectando a sala ' + roomId + '...';
 
-  // Intentar conectar via P2P al host
-  let joined = false;
-  await new Promise(resolve => {
-    setupPeerClient(roomId, (ok) => {
-      if(ok) {
-        console.log('[Unirse] ✅ Conectado P2P al host');
-        joined = true;
-      } else {
-        console.warn('[Unirse] P2P no disponible');
-      }
-      resolve();
-    });
-  });
+  const sock = getSocket();
 
-  // Intentar obtener datos de sala del host
-  const roomData = await fbGet('rooms/' + code);
-  if(!roomData && !joined) {
-    // No hay P2P ni datos — el host puede estar en el mismo dispositivo (BC)
-    // Esperar un momento por si llegan datos via BroadcastChannel
-    await new Promise(r => setTimeout(r, 1000));
-    const retry = await fbGet('rooms/' + code);
-    if(!retry) {
-      document.getElementById('waitingMsg').innerHTML =
-        '<b>❌ No se encontró la sala ' + code + '</b><br>' +
-        '<small style="color:#aaa">Verificá que el host esté en la misma red o dispositivo.<br>' +
-        'Para jugar entre dispositivos distintos se necesita P2P (puede requerir internet).</small>';
-      setOnlineStatus('disconnected'); return;
-    }
-  }
-
-  const finalData = roomData || await fbGet('rooms/' + code) || {};
-  if(finalData.started) {
-    document.getElementById('waitingMsg').textContent = '❌ La partida ya comenzó.';
-    setOnlineStatus('disconnected'); return;
-  }
-
-  // Registrarse en la sala
-  const existing = finalData.players
-    ? (Array.isArray(finalData.players) ? finalData.players : Object.values(finalData.players))
-    : [];
-  myPlayerId = existing.length;
-  const updated = [...existing, { id: myPlayerId, name, ready: true }];
-  await fbSet('rooms/' + roomId + '/players', updated);
-
-  // Actualizar URL con el código de sala (soporta ambos formatos)
-  if(window.location.protocol === 'file:') {
-    window.location.hash = 'room=' + roomId; // file:// solo soporta hash
-  } else {
+  sock.once('roomJoined', ({ playerId, players }) => {
+    myPlayerId = playerId;
     const newUrl = window.location.origin + window.location.pathname + '?room=' + roomId;
     window.history.replaceState({}, '', newUrl);
-  }
-  console.log('[Crear Sala] URL actualizada. Código:', roomId, '| Link:', buildInviteUrl());
-  document.getElementById('roomCodeDisplay').textContent = roomId;
-  document.getElementById('roomInfo').style.display = 'block';
-  document.getElementById('waitingMsg').style.display = 'block';
-  document.getElementById('waitingMsg').textContent = '✅ Unido a sala ' + roomId + '! Esperando que el host inicie...';
-  document.getElementById('lobbyStartBtn').style.display = 'none';
-  updateRoomPlayersList(updated);
-  setOnlineStatus('connected', `Sala ${roomId} — Jugador ${myPlayerId + 1}`);
-
-  fbListen('rooms/' + roomId, (data) => {
-    if(!data) return;
-    if(data.players) {
-      const pls = Array.isArray(data.players) ? data.players : Object.values(data.players);
-      updateRoomPlayersList(pls);
-    }
-    if(data.started && data.gameState) {
-      stopFbListen();
-      startClientGame(data);
-    }
+    document.getElementById('roomCodeDisplay').textContent = roomId;
+    document.getElementById('roomInfo').style.display = 'block';
+    document.getElementById('waitingMsg').textContent = '✅ Unido a sala ' + roomId + '! Esperando que el host inicie...';
+    document.getElementById('lobbyStartBtn').style.display = 'none';
+    updateRoomPlayersList(players);
+    setOnlineStatus('connected', `Sala ${roomId} — Jugador ${myPlayerId + 1}`);
+    console.log('[Unirse] ✅ Unido como jugador', myPlayerId);
   });
+
+  // El host inicia la partida → todos reciben gameStarted
+  sock.once('gameStarted', ({ players, myPlayerId: mid }) => {
+    myPlayerId = mid;
+    startClientGame({ players });
+  });
+
+  sock.emit('joinRoom', { roomId, name });
 }
+
+
 
 async function startHostGame() {
   stopFbListen();
-  const roomData = await fbGet(`rooms/${roomId}`);
-  const allPlayers = roomData && roomData.players
-    ? (Array.isArray(roomData.players) ? roomData.players : Object.values(roomData.players))
-    : [{ id: 0, name: myPlayerName }];
-  const humanNames = allPlayers.map(p => p.name);
+  const sock = getSocket();
 
-  document.getElementById('lobbyOverlay').style.display = 'none';
-  setOnlineStatus('connected', `Sala: ${roomId} | ${allPlayers.length} jugadores`);
-  initPlayersOnline(humanNames, myPlayerId);
-  buildPlayers();
-  updateBankUI();
+  // El servidor nos devuelve gameStarted con la lista final de jugadores
+  // (incluyendo el propio host)
+  sock.once('gameStarted', ({ players }) => {
+    const humanNames = players.map(p => p.name);
+    document.getElementById('lobbyOverlay').style.display = 'none';
+    setOnlineStatus('connected', `Sala: ${roomId} | ${players.length} jugadores`);
+    initPlayersOnline(humanNames, myPlayerId);
+    buildPlayers();
+    updateBankUI();
+    startOnlineHostLoop();
+    createStartButton();
+  });
 
-  await fbPatch(`rooms/${roomId}`, { started: true, _ts: Date.now() });
-  startOnlineHostLoop();
-  createStartButton();
+  sock.emit('startGame', { roomId });
 }
 
 function startClientGame(roomState) {
@@ -1858,27 +1635,31 @@ function updateRoomPlayersList(pls) {
 
 let lastActionTs = 0;
 function startOnlineHostLoop() {
-  fbListen(`rooms/${roomId}/action`, (act) => {
-    if(!act || !act._ts || act._ts <= lastActionTs) return;
+  const sock = getSocket();
+
+  // Recibir acciones de los clientes via servidor
+  sock.on('playerAction', (act) => {
+    if (!act || !act._ts || act._ts <= lastActionTs) return;
     lastActionTs = act._ts;
 
-    // Validate: the action must come from the player whose turn it is
-    if(act.playerId === undefined || act.playerId !== actionIndex) {
+    if (act.playerId === undefined || act.playerId !== actionIndex) {
       console.warn(`[HOST] Acción ignorada: esperaba turno ${actionIndex}, recibió ${act.playerId}`);
       return;
     }
-    if(!gameRunning) return;
+    if (!gameRunning) return;
 
     console.log(`[HOST] Ejecutando acción de jugador ${act.playerId}: ${act.action}`);
     executeAction(players[act.playerId], act.action, act.raiseAmount || 0);
-    // executeAction advances actionIndex and calls runActionLoop internally via setTimeout
   });
 }
 
 function startOnlineClientLoop() {
+  const sock = getSocket();
   let lastStateTs = 0;
-  fbListen(`rooms/${roomId}/gameState`, (state) => {
-    if(!state || !state._ts || state._ts <= lastStateTs) return;
+
+  // Recibir actualizaciones de estado del host via servidor
+  sock.on('gameState', (state) => {
+    if (!state || !state._ts || state._ts <= lastStateTs) return;
     lastStateTs = state._ts;
     applyStateUpdate(state);
   });
@@ -1944,10 +1725,14 @@ function applyStateUpdate(state) {
 }
 
 function sendOnlineAction(action, raiseAmount) {
-  if(!roomId) { console.warn('[CLIENT] sendOnlineAction: sin roomId'); return; }
-  const payload = { playerId: myPlayerId, action, raiseAmount, _ts: Date.now() };
+  if (!roomId || !socket) { console.warn('[CLIENT] sendOnlineAction: sin conexión'); return; }
   console.log(`[CLIENT] Enviando acción: turno=${actionIndex}, miId=${myPlayerId}, acción=${action}`);
-  writeAction(payload);
+  socket.emit('playerAction', {
+    roomId,
+    playerId: myPlayerId,
+    action,
+    raiseAmount: raiseAmount || 0,
+  });
 }
 
 function setOnlineStatus(status, text) {

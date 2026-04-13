@@ -1337,34 +1337,10 @@ function generateRoomId() {
   return id;
 }
 
-function buildInviteUrl() {
-  if (!roomId) return window.location.href;
-  const base = window.location.origin + window.location.pathname;
-  return base + '?room=' + roomId;
-}
-
-
-
-function generateRoomId() {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let id = '';
-  for(let i = 0; i < 6; i++) id += chars[Math.floor(Math.random() * chars.length)];
-  return id;
-}
-
 // ── Lobby broadcast helpers (compat wrappers) ──
 async function writeRoomState(data) {
   if(!roomId) return;
   await fbPatch(`rooms/${roomId}`, { ...data, _ts: Date.now() });
-}
-async function writeAction(action) {
-  if(!roomId) return;
-  await fbSet(`rooms/${roomId}/action`, { ...action, _ts: Date.now() });
-}
-async function broadcastGameState() {
-  if(gameMode !== 'host' || !roomId) return;
-  const state = buildGameStateSnapshot();
-  await fbSet(`rooms/${roomId}/gameState`, state);
 }
 
 // ============================================================
@@ -1565,6 +1541,9 @@ async function joinOnlineRoom(name, code) {
 
   const sock = getSocket();
 
+  // Remover listeners previos para evitar duplicados en reconexión
+  sock.off('gameStarted');
+
   sock.once('roomJoined', ({ playerId, players }) => {
     myPlayerId = playerId;
     const newUrl = window.location.origin + window.location.pathname + '?room=' + roomId;
@@ -1578,10 +1557,13 @@ async function joinOnlineRoom(name, code) {
     console.log('[Unirse] ✅ Unido como jugador', myPlayerId);
   });
 
-  // El host inicia la partida → todos reciben gameStarted
-  sock.once('gameStarted', ({ players, myPlayerId: mid }) => {
+  // Usar .on (no .once) para no perder el evento si llega después de la re-render
+  sock.on('gameStarted', ({ players: serverPlayers, myPlayerId: mid }) => {
+    // Sólo procesar si somos un cliente (no el host)
+    if (gameMode !== 'client') return;
     myPlayerId = mid;
-    startClientGame({ players });
+    console.log('[CLIENT] gameStarted recibido, soy jugador', myPlayerId);
+    startClientGame({ players: serverPlayers });
   });
 
   sock.emit('joinRoom', { roomId, name });
@@ -1593,17 +1575,18 @@ async function startHostGame() {
   stopFbListen();
   const sock = getSocket();
 
-  // El servidor nos devuelve gameStarted con la lista final de jugadores
-  // (incluyendo el propio host)
-  sock.once('gameStarted', ({ players }) => {
-    const humanNames = players.map(p => p.name);
+  // El servidor retransmite gameStarted a todos (incluyendo al host)
+  sock.once('gameStarted', ({ players: serverPlayers, myPlayerId: mid }) => {
+    myPlayerId = mid !== undefined ? mid : 0; // host siempre es 0
+    const humanNames = serverPlayers.map(p => p.name);
     document.getElementById('lobbyOverlay').style.display = 'none';
-    setOnlineStatus('connected', `Sala: ${roomId} | ${players.length} jugadores`);
+    setOnlineStatus('connected', `Sala: ${roomId} | ${serverPlayers.length} jugadores`);
     initPlayersOnline(humanNames, myPlayerId);
     buildPlayers();
     updateBankUI();
     startOnlineHostLoop();
     createStartButton();
+    broadcastGameState();
   });
 
   sock.emit('startGame', { roomId });
@@ -1621,6 +1604,9 @@ function startClientGame(roomState) {
   buildPlayers();
   updateBankUI();
   startOnlineClientLoop();
+
+  // Pedir el último estado al servidor por si ya hubo un broadcast antes de conectarse
+  if (socket) socket.emit('requestState', { roomId });
 }
 
 function hostPollPlayers() {} // replaced by fbListen
@@ -1665,11 +1651,7 @@ function startOnlineClientLoop() {
   });
 }
 
-function broadcastGameState() {
-  if(gameMode !== 'host') return;
-  const state = buildGameStateSnapshot();
-  fbSet(`rooms/${roomId}/gameState`, state);
-}
+// broadcastGameState is defined above using Socket.IO
 
 function buildGameStateSnapshot() {
   // For each player slot, we send real cards only for that slot's owner.
@@ -3623,14 +3605,16 @@ function updateBankUI() {
 }
 
 function showPlayerHand() {
-  // Show the hand of the currently acting human (for multi-local mode)
+  // In online mode show this client's own hand; in local mode show the current human's hand
   let pIdx = humanIndex;
-  if(humanIndices.length > 1 && players[actionIndex] && players[actionIndex].isHuman) {
+  if(gameMode === 'host' || gameMode === 'client') {
+    pIdx = myPlayerId;
+  } else if(humanIndices.length > 1 && players[actionIndex] && players[actionIndex].isHuman) {
     pIdx = actionIndex;
   }
   const p = players[pIdx];
   let html = '';
-  (p.hand||[]).forEach(c => html += cardHTML(c));
+  (p && p.hand||[]).forEach(c => html += cardHTML(c));
   document.getElementById('playerHand').innerHTML = html;
 }
 
@@ -3641,7 +3625,10 @@ function updateCommunityCards() {
 }
 
 function showActionPanel() {
-  const p = players[humanIndex];
+  // In online mode use myPlayerId; in local mode use humanIndex
+  const idx = (gameMode === 'host' || gameMode === 'client') ? myPlayerId : humanIndex;
+  const p = players[idx];
+  if (!p) return;
   const panel = document.getElementById('actionPanel');
   panel.style.display = 'block';
 

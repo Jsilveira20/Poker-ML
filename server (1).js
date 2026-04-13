@@ -108,11 +108,13 @@ io.on("connection", (socket) => {
     room.started = true;
     console.log(`[JUEGO] Partida iniciada en ${roomId} con ${room.players.length} jugadores`);
 
-    // Avisar a TODOS — cada cliente arranca con su playerId
+    const playerList = room.players.map(q => ({ id: q.playerId, name: q.name }));
+
+    // Avisar a TODOS — cada cliente recibe su propio myPlayerId
     room.players.forEach(p => {
       io.to(p.socketId).emit("gameStarted", {
-        players: room.players.map(q => ({ id: q.playerId, name: q.name })),
-        myPlayerId: p.playerId,
+        players: playerList,
+        myPlayerId: p.playerId,  // cada uno recibe su propio índice
       });
     });
   });
@@ -133,6 +135,13 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("gameState", state);
   });
 
+  // ── PEDIR ESTADO ACTUAL (cliente que reconecta) ───────────────────────────
+  socket.on("requestState", ({ roomId }) => {
+    const room = rooms[roomId];
+    if (!room || !room.gameState) return;
+    socket.emit("gameState", room.gameState);
+  });
+
   // ── ACCIÓN DE JUGADOR (cliente → host) ────────────────────────────────────
   // Cuando es el turno de un cliente, éste envía su acción al servidor
   // y el servidor la retransmite al host para que la procese.
@@ -142,8 +151,14 @@ io.on("connection", (socket) => {
     if (!room || !room.started) return;
 
     const sender = room.players.find(p => p.socketId === socket.id);
-    if (!sender || sender.playerId !== playerId) {
-      console.warn(`[ACCIÓN] Rechazada: ${socket.id} dice ser jugador ${playerId} pero es ${sender?.playerId}`);
+    if (!sender) {
+      console.warn(`[ACCIÓN] Socket ${socket.id} no está en la sala ${roomId}`);
+      return;
+    }
+
+    // Verificar que el socket corresponde al playerId que dice ser
+    if (sender.playerId !== playerId) {
+      console.warn(`[ACCIÓN] Rechazada: ${socket.id} dice ser jugador ${playerId} pero es ${sender.playerId}`);
       return;
     }
 
@@ -183,4 +198,3 @@ io.on("connection", (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
-

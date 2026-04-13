@@ -1603,9 +1603,15 @@ function startClientGame(roomState) {
   initPlayersOnline(allPlayers.map(p => p.name), myPlayerId);
   buildPlayers();
   updateBankUI();
+
+  // Mostrar mensaje de espera hasta que el host inicie la primera mano
+  setPhaseLabel('Texas Hold\'em ML');
+  setMsg('Esperando que el host inicie la primera mano...');
+  document.getElementById('exitRoomBtn').style.display = 'block';
+
   startOnlineClientLoop();
 
-  // Pedir el último estado al servidor por si ya hubo un broadcast antes de conectarse
+  // Pedir el ultimo estado al servidor por si ya hubo un broadcast
   if (socket) socket.emit('requestState', { roomId });
 }
 
@@ -1622,49 +1628,46 @@ function updateRoomPlayersList(pls) {
 let lastActionTs = 0;
 function startOnlineHostLoop() {
   const sock = getSocket();
+  sock.off('playerAction');
 
-  // Recibir acciones de los clientes via servidor
   sock.on('playerAction', (act) => {
     if (!act || !act._ts || act._ts <= lastActionTs) return;
     lastActionTs = act._ts;
 
-    if (act.playerId === undefined || act.playerId !== actionIndex) {
-      console.warn(`[HOST] Acción ignorada: esperaba turno ${actionIndex}, recibió ${act.playerId}`);
+    if (!gameRunning) {
+      console.warn('[HOST] Accion recibida pero gameRunning=false');
       return;
     }
-    if (!gameRunning) return;
-
-    console.log(`[HOST] Ejecutando acción de jugador ${act.playerId}: ${act.action}`);
+    if (act.playerId === undefined || act.playerId !== actionIndex) {
+      console.warn(`[HOST] Accion ignorada: esperaba ${actionIndex}, recibio ${act.playerId}`);
+      return;
+    }
+    console.log(`[HOST] Ejecutando accion jugador ${act.playerId}: ${act.action}`);
     executeAction(players[act.playerId], act.action, act.raiseAmount || 0);
   });
 }
 
 function startOnlineClientLoop() {
   const sock = getSocket();
-  let lastStateTs = 0;
+  sock.off('gameState');
 
-  // Recibir actualizaciones de estado del host via servidor
   sock.on('gameState', (state) => {
-    if (!state || !state._ts || state._ts <= lastStateTs) return;
-    lastStateTs = state._ts;
+    if (!state) return;
     applyStateUpdate(state);
   });
 }
 
 // broadcastGameState is defined above using Socket.IO
 
-function buildGameStateSnapshot() {
-  // For each player slot, we send real cards only for that slot's owner.
-  // The client will only update a hand if the server sent non-null cards,
-  // so their own cards (set at deal time from a previous broadcast) remain intact.
-  // During showdown, reveal everyone's cards.
+function buildGameStateSnapshot(winnerIdx, winnerHandName, winnerPotAmt) {
   return {
     _ts: Date.now(), phase, pot, currentBet, communityCards, actionIndex, gameRunning,
-    players: players.map((p, i) => ({
+    winner: winnerIdx !== undefined ? winnerIdx : null,
+    winnerHandName: winnerHandName || null,
+    winnerPot: winnerPotAmt || pot,
+    players: players.map((p) => ({
       name: p.name, chips: p.chips, bet: p.bet, folded: p.folded,
-      // Send real cards for showdown, or for every slot so each client
-      // can identify their own hand. Clients ignore cards for other slots.
-      hand: phase === 'showdown' ? p.hand : p.hand
+      hand: p.hand  // mandamos todas las cartas; el cliente solo usa las suyas (excepto showdown)
     }))
   };
 }
@@ -1678,10 +1681,9 @@ function applyStateUpdate(state) {
   (state.players||[]).forEach((sp, i) => {
     if(!players[i]) return;
     players[i].chips = sp.chips; players[i].bet = sp.bet; players[i].folded = sp.folded;
-    // Only apply hand data for this client's own seat, or during showdown
-    // This prevents seeing other players' hole cards
+    // Solo aplicar cartas del asiento propio, o en showdown mostrar todas
     if(i === myPlayerId || phase === 'showdown') {
-      if(sp.hand && sp.hand.length > 0 && sp.hand.every(c => c !== null)) {
+      if(sp.hand && sp.hand.length > 0) {
         players[i].hand = sp.hand;
       }
     }
@@ -1691,12 +1693,34 @@ function applyStateUpdate(state) {
   setPhaseLabel(PHASE_LABELS[phase] || phase);
   updateBankUI();
 
+  // Mostrar mano del cliente siempre que tenga cartas
+  if(players[myPlayerId] && players[myPlayerId].hand && players[myPlayerId].hand.length > 0) {
+    showPlayerHand();
+  }
+
   if(!gameRunning) {
-    hideActionPanel(); return;
+    hideActionPanel();
+    // Si viene info de ganador, mostrar overlay en cliente
+    if(state.winner !== undefined && state.winner !== null) {
+      const w = players[state.winner];
+      if(w) {
+        const isMyWin = state.winner === myPlayerId;
+        document.getElementById('winnerTitle').textContent = isMyWin ? '\uD83C\uDFC6 \u00A1Ganaste!' : (w.isHuman ? `\uD83C\uDFC6 \u00A1Gan\u00F3 ${w.name}!` : '\uD83C\uDCCF Gan\u00F3 el Bot');
+        document.getElementById('winnerName').textContent = w.name;
+        document.getElementById('winnerHand').textContent = state.winnerHandName || '';
+        document.getElementById('winnerPot').textContent = `Pozo ganado: $${state.winnerPot || pot}`;
+        // Mostrar manos en el overlay si tenemos cartas
+        const active = players.filter(p => !p.folded);
+        if(active.length > 0) showAllHands(active, w);
+        const winBtn = document.querySelector('#winnerBox button');
+        if(winBtn) winBtn.textContent = 'OK';
+        document.getElementById('winnerOverlay').style.display = 'flex';
+      }
+    }
+    return;
   }
 
   if(actionIndex === myPlayerId) {
-    // It's this client's turn — show their hand and action buttons
     showPlayerHand();
     showActionPanel();
   } else {
@@ -3353,6 +3377,10 @@ function showAllHands(active, winner) {
 }
 
 function declareWinner(winner, handResult) {
+  const winnerIdx = players.indexOf(winner);
+  const winnerHandName = handResult ? HAND_NAMES[handResult.rank] : 'Ganador por default';
+  const winnerPotAmt = pot;
+
   winner.chips += pot;
   if(mlKnowledge.winRates[winner.name] === undefined) mlKnowledge.winRates[winner.name] = 0;
   mlKnowledge.winRates[winner.name]++;
@@ -3367,58 +3395,57 @@ function declareWinner(winner, handResult) {
     if(p === winner) {
       s.wins++;
       s.totalWon += pot;
-      // Winners get a tiny aggressiveness boost
       s.aggressiveness = Math.min(1, s.aggressiveness + 0.03);
     } else if(!p.folded) {
       s.totalLost += (p.bet || 0);
-      // Non-folder losers get slightly more conservative
       s.aggressiveness = Math.max(0.1, s.aggressiveness - 0.02);
     } else {
-      // Folders: if they folded a lot, slight passivity reinforcement
       s.aggressiveness = Math.max(0.1, s.aggressiveness - 0.01);
     }
   });
 
-  // ── Record ML samples for training ──────────────────────────
-  players.forEach(p => {
-    if(!p.isHuman) return; // only track human actions for ML dataset
-    // We track any player's hand data as samples
-  });
-  // Record ALL players' last hand state as ML samples
-  // (using their hand strength, pot situation at time of last action)
   players.forEach(p => {
     if(p.hand && p.hand.length >= 2) {
       const hs = evaluateHandStrength(p.hand, communityCards);
       const toCall = 0;
       const po = pot > 0 ? toCall / (pot + toCall) : 0;
-      const lastAction = p._lastAction || 1; // 0=fold,1=call,2=raise
+      const lastAction = p._lastAction || 1;
       const didWin = p === winner ? 1 : 0;
       addMLSample(hs, phase, po, pot, lastAction, didWin);
     }
   });
 
-  // Retrain every N rounds (no data leakage: only past data)
   if(roundsPlayed - mlDataset.lastRetrain >= mlDataset.retrainInterval) {
     mlDataset.lastRetrain = roundsPlayed;
     retrainML();
   }
-
-  // Track rounds with ML bot
   if(players.find(p=>p.isML)) mlDataset.roundsWithBot++;
 
   const overlay = document.getElementById('winnerOverlay');
-  const isMyWin = winner.isHuman && (gameMode === 'local' || players.indexOf(winner) === myPlayerId);
+  const isMyWin = winner.isHuman && (gameMode === 'local' || winnerIdx === myPlayerId);
   document.getElementById('winnerTitle').textContent = isMyWin ? '🏆 ¡Ganaste!' : (winner.isHuman ? `🏆 ¡Ganó ${winner.name}!` : '🃏 Ganó el Bot');
   document.getElementById('winnerName').textContent = winner.name;
-  document.getElementById('winnerHand').textContent = handResult ? HAND_NAMES[handResult.rank] : 'Ganador por default';
-  document.getElementById('winnerPot').textContent = `Pozo ganado: $${pot}`;
+  document.getElementById('winnerHand').textContent = winnerHandName;
+  document.getElementById('winnerPot').textContent = `Pozo ganado: $${winnerPotAmt}`;
   overlay.style.display = 'flex';
 
   gameRunning = false;
   updateBankUI();
   document.getElementById('roundsSpan').textContent = roundsPlayed;
-  // Show best bot winrate in ML bar
   updateMLBar();
+
+  // Actualizar texto del boton segun rol
+  const winBtn = document.querySelector('#winnerBox button');
+  if(winBtn) {
+    winBtn.textContent = gameMode === 'client' ? 'OK' : 'Nueva Mano';
+  }
+
+  // Broadcast resultado a clientes (con cartas reveladas y ganador)
+  if(gameMode === 'host') {
+    const sock = getSocket();
+    const state = buildGameStateSnapshot(winnerIdx, winnerHandName, winnerPotAmt);
+    sock.emit('gameState', { roomId, state });
+  }
 }
 
 function updateMLBar() {
@@ -3781,9 +3808,12 @@ function addBot6() {
 // ============================================================
 function nextHand() {
   document.getElementById('winnerOverlay').style.display = 'none';
-  // Note: card clearing is handled inside startHand → resetPlayerHands()
-  // to avoid duplicate clearing that could cause flash of old cards
-  setTimeout(startHand, 200); // ⚡ era 400ms
+  if(gameMode === 'client') {
+    // El cliente solo espera — el host iniciará la siguiente mano
+    setMsg('Esperando que el host inicie la siguiente mano...');
+    return;
+  }
+  setTimeout(startHand, 200);
 }
 
 function createStartButton() {
@@ -3817,17 +3847,27 @@ function createStartButton() {
 //   Al salir con 1900: bank += 1900 → bank = 20900 ✓ (ganó 900)
 // ============================================================
 function exitRoom() {
-  const humanPlayer = players[humanIndex] || players.find(p => p.isHuman);
+  // En modo online usar myPlayerId; en local usar humanIndex
+  const pIdx = (gameMode === 'host' || gameMode === 'client') ? myPlayerId : humanIndex;
+  const humanPlayer = players[pIdx] || players.find(p => p.isHuman);
 
   let stackFinal = 0;
   if(humanPlayer) {
     stackFinal = humanPlayer.chips || 0;
-
-    // Devolver al banco el stack que queda sobre la mesa
     globalBank += stackFinal;
-
-    console.log(`[EXIT] Stack devuelto: +$${stackFinal} | Banco final: $${globalBank} | (banco antes de devolver: $${globalBank - stackFinal})`);
+    console.log(`[EXIT] Stack devuelto: +$${stackFinal} | Banco final: $${globalBank}`);
   }
+
+  // Desconectar del socket si estamos en modo online
+  if((gameMode === 'host' || gameMode === 'client') && socket) {
+    socket.off('gameState');
+    socket.off('playerAction');
+    socket.off('gameStarted');
+    socket.off('playersUpdate');
+    socket.disconnect();
+    socket = null;
+  }
+  gameMode = 'local'; // reset para próxima sesión
 
   // Detener el juego
   gameRunning = false;

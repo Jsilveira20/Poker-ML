@@ -82,10 +82,43 @@ body::before {
   border: 1px solid var(--gold);
   box-shadow: 0 0 20px var(--gold-glow), inset 0 1px 0 rgba(255,220,100,0.15);
   border-radius: 10px; padding: 9px 16px; font-size: 13px;
-  color: var(--gold); pointer-events: none; z-index: 100;
+  color: var(--gold); pointer-events: all; z-index: 100;
   letter-spacing: 0.5px; font-family: 'Rajdhani', sans-serif; font-weight: 500;
 }
 #bankUI span { color: var(--gold-light); font-weight: 700; font-size: 14px; }
+
+/* ── Audio Control Panel — debajo del banco ── */
+#audioControl {
+  position: fixed; top: 58px; right: 14px;
+  background: linear-gradient(135deg, rgba(20,12,0,0.97), rgba(40,25,0,0.97));
+  border: 1px solid rgba(212,160,23,0.5);
+  box-shadow: 0 0 12px rgba(212,160,23,0.15);
+  border-radius: 9px; padding: 7px 12px;
+  display: none; align-items: center; gap: 8px;
+  pointer-events: all; z-index: 100;
+  font-family: 'Rajdhani', sans-serif;
+}
+#audioControl .audio-mute-btn {
+  background: none; border: none; cursor: pointer;
+  font-size: 16px; line-height: 1; padding: 2px;
+  transition: transform 0.12s; color: var(--gold);
+  display: flex; align-items: center;
+}
+#audioControl .audio-mute-btn:hover { transform: scale(1.2); }
+#audioControl .audio-vol-slider {
+  -webkit-appearance: none; appearance: none;
+  width: 72px; height: 4px;
+  background: linear-gradient(90deg, var(--gold), #5a3800);
+  border-radius: 2px; outline: none; cursor: pointer;
+}
+#audioControl .audio-vol-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 13px; height: 13px;
+  border-radius: 50%; background: var(--gold-light);
+  box-shadow: 0 0 5px rgba(212,160,23,0.8); cursor: pointer;
+}
+#audioControl .audio-label {
+  font-size: 10px; color: rgba(212,160,23,0.6); letter-spacing: 0.5px;
+}
 
 #infoBar {
   position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
@@ -126,11 +159,16 @@ body::before {
 
 /* ONLINE STATUS BAR */
 #onlineBar {
-  position: fixed; bottom: 12px; left: 14px;
+  position: fixed; bottom: 12px; right: 14px;
   background: rgba(0,0,0,0.92); border: 1px solid #444;
   border-radius: 10px; padding: 7px 14px; font-size: 11px;
   color: #aaa; pointer-events: all; z-index: 100;
   display: none; min-width: 180px;
+}
+/* When onlineBar is visible, push exitRoomBtn above it (~56px) */
+#onlineBar.visible ~ * #exitRoomBtn,
+body.online-active #exitRoomBtn {
+  bottom: 70px;
 }
 #onlineBar .online-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #555; margin-right: 5px; }
 #onlineBar .online-dot.connected { background: #44cc44; box-shadow: 0 0 6px #44cc44; animation: neonPulse 2s infinite; }
@@ -143,7 +181,7 @@ body::before {
 
 /* ── Premium Playing Cards ── */
 #playerHand {
-  position: fixed; bottom: 145px; left: 50%; transform: translateX(-50%);
+  position: fixed; bottom: 160px; left: 50%; transform: translateX(-50%);
   display: flex; gap: 12px; pointer-events: none; z-index: 100;
 }
 .hand-card {
@@ -211,8 +249,8 @@ body::before {
   border: 1px solid var(--panel-border);
   box-shadow: 0 0 30px rgba(212,160,23,0.2), 0 -4px 20px rgba(0,0,0,0.5),
               inset 0 1px 0 rgba(255,220,80,0.08);
-  border-radius: 16px; padding: 14px 22px; pointer-events: all;
-  z-index: 100; display: none; min-width: 400px; text-align: center;
+  border-radius: 16px; padding: 10px 18px; pointer-events: all;
+  z-index: 100; display: none; min-width: 380px; text-align: center;
   /* ⚡ backdrop-filter eliminado — era el mayor causante de lag CSS en el panel de acción */
 }
 #actionPanel .phase-tag {
@@ -241,7 +279,7 @@ body::before {
 #raiseValue { font-size: 15px; color: var(--gold-light); min-width: 80px; text-align: right; font-weight: 700; font-family: 'Rajdhani', sans-serif; }
 #actionPanel .btn-row { display: flex; gap: 8px; justify-content: center; }
 .btn {
-  padding: 10px 22px; border: none; border-radius: 9px; font-size: 14px;
+  padding: 8px 16px; border: none; border-radius: 9px; font-size: 13px;
   font-weight: 700; cursor: pointer; transition: all 0.15s cubic-bezier(.34,1.56,.64,1);
   letter-spacing: 0.5px; font-family: 'Rajdhani', sans-serif;
 }
@@ -253,7 +291,7 @@ body::before {
 .btn-raise { background: linear-gradient(135deg, #9a7000, #5a4000); color: #ffe080; border: 1px solid #cc9900; }
 
 #addBot6Btn {
-  position: fixed; bottom: 14px; right: 14px;
+  position: fixed; bottom: 60px; right: 14px;
   background: linear-gradient(135deg, #2d1a5a, #1a0e3a);
   border: 1px solid #8855ff;
   box-shadow: 0 0 16px rgba(136,85,255,0.3);
@@ -267,20 +305,50 @@ body::before {
 
 /* ── Exit Room Button ── */
 #exitRoomBtn {
-  position: fixed; bottom: 60px; right: 14px;
+  position: fixed; bottom: 14px; left: 14px;
   background: linear-gradient(135deg, #3a0a0a, #1e0505);
   border: 1px solid #882222;
   box-shadow: 0 0 12px rgba(180,30,30,0.3);
   color: #ffaaaa; padding: 10px 18px; border-radius: 10px;
   font-size: 13px; cursor: pointer; pointer-events: all;
-  z-index: 100; display: none; font-weight: 700;
+  z-index: 200; display: none; font-weight: 700;
   font-family: 'Rajdhani', sans-serif; letter-spacing: 0.5px;
   transition: all 0.15s;
+}
+/* En modo online (cuando onlineBar está visible abajo-izq), el exit va abajo-izq sin desplazamiento */
+#exitRoomBtn.online-mode {
+  bottom: 14px; left: 14px;
 }
 #exitRoomBtn:hover {
   background: linear-gradient(135deg, #5a1010, #3a0808);
   box-shadow: 0 0 20px rgba(200,40,40,0.5);
   transform: translateY(-2px);
+}
+
+/* ── Exit button repositioned when ML stats panel is visible ── */
+#exitRoomBtn.stats-visible {
+  bottom: 14px;
+  left: 14px;
+  z-index: 300;
+}
+
+/* ── Waiting indicator for online turns ── */
+@keyframes waitingPulse {
+  0%,100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+#msgLabel.waiting {
+  animation: waitingPulse 1.2s ease-in-out infinite;
+  color: #aac4ff;
+}
+
+/* ── Action panel transition ── */
+#actionPanel {
+  transition: opacity 0.12s ease-out;
+}
+#actionPanel.hidden {
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* ── ML Level Progress Bar ── */
@@ -537,6 +605,15 @@ body::before {
   }
   #addBot6Btn { top: 70px; right: 8px; }
   #exitRoomBtn { top: 116px; right: 8px; }
+  #exitRoomBtn.stats-visible { top: auto; bottom: 8px; left: 8px; right: auto; }
+
+  /* ── Audio control: solo mute en mobile, sin slider ── */
+  #audioControl {
+    top: 52px; right: 8px;
+    padding: 5px 9px;
+  }
+  #audioControl .audio-vol-slider { display: none; }
+  #audioControl .audio-label { display: none; }
 
   /* ── Winner overlay: más compacto ── */
   #winnerBox {
@@ -633,6 +710,12 @@ body::before {
 <canvas id="gameCanvas"></canvas>
 <div id="ui">
   <div id="bankUI">Banco: <span id="bankAmount">20000</span> | Fichas: <span id="chipsAmount">1000</span></div>
+  <!-- Audio Control — debajo del banco -->
+  <div id="audioControl">
+    <button class="audio-mute-btn" id="audioMuteBtn" onclick="toggleMute()" title="Silenciar/Activar música">🔊</button>
+    <input type="range" class="audio-vol-slider" id="audioVolSlider" min="0" max="100" value="35" oninput="setVolume(this.value)">
+    <span class="audio-label">MÚS</span>
+  </div>
   <div id="infoBar">
     <div id="phaseLabel">Texas Hold'em ML</div>
     <div id="potLabel">Pozo: 0</div>
@@ -671,7 +754,7 @@ body::before {
 
   <!-- ML Performance Panel -->
   <div id="mlPerfPanel" style="
-    position:fixed; bottom:12px; right:14px; display:none;
+    position:fixed; bottom:60px; right:14px; display:none;
     background:linear-gradient(135deg,rgba(0,10,35,0.97),rgba(0,20,60,0.97));
     border:1px solid #2a6aaa; border-radius:10px; padding:10px 14px;
     font-size:10px; color:#4a9eff; z-index:100; min-width:200px;
@@ -1655,25 +1738,19 @@ function startOnlineHostLoop() {
 
     const actKey = `${act._ts}_${act.playerId}_${act.action}`;
     if (act._ts && act._ts < lastActionTs) {
-      console.warn('[HOST] Accion descartada (replay sesion anterior):', actKey);
-      return;
+      return; // Accion obsoleta descartada silenciosamente
     }
     if (actKey === lastActionSeq) {
-      console.warn('[HOST] Accion duplicada ignorada:', actKey);
-      return;
+      return; // Duplicado ignorado silenciosamente
     }
     lastActionTs = act._ts || Date.now();
     lastActionSeq = actKey;
 
-    if (!gameRunning) {
-      console.warn('[HOST] Accion recibida pero gameRunning=false — ignorando');
-      return;
-    }
+    if (!gameRunning) return;
     if (act.playerId === undefined || act.playerId !== actionIndex) {
       console.warn(`[HOST] Accion ignorada: esperaba turno ${actionIndex}, recibio jugador ${act.playerId}`);
       return;
     }
-    console.log(`[HOST] Ejecutando accion jugador ${act.playerId}: ${act.action} raise=${act.raiseAmount ?? 0}`);
     executeAction(players[act.playerId], act.action, act.raiseAmount || 0);
   });
 
@@ -1684,21 +1761,31 @@ function startOnlineClientLoop() {
   const sock = getSocket();
   sock.off('gameState');
 
+  let _pendingState = null;
+  let _processingState = false;
+
+  function processState() {
+    if (!_pendingState || _processingState) return;
+    _processingState = true;
+    const state = _pendingState;
+    _pendingState = null;
+    // Defer to next microtask to avoid blocking the socket event loop
+    requestAnimationFrame(() => {
+      if (gameMode === 'client') applyStateUpdate(state);
+      _processingState = false;
+      if (_pendingState) processState(); // hay otro estado pendiente
+    });
+  }
+
   sock.on('gameState', (state) => {
-    if (!state) {
-      console.warn('[CLIENT] gameState recibido pero es NULL/undefined');
-      return;
-    }
-    console.log('[CLIENT] 📨 gameState RECIBIDO - fase:', state.phase, 'action:', state.actionIndex, 'yo:', myPlayerId);
-    if (gameMode !== 'client') {
-      console.warn('[CLIENT] gameState rechazado - gameMode es', gameMode, 'no client');
-      return;
-    }
-    applyStateUpdate(state);
+    if (!state) return;
+    if (gameMode !== 'client') return;
+    // Solo guardamos el último estado — descartamos intermedios si llegaron muy seguidos
+    _pendingState = state;
+    processState();
   });
 
   console.log('[CLIENT] 👂 startOnlineClientLoop: escuchando gameState en modo client');
-  console.log('[CLIENT] Mi ID:', myPlayerId, 'gameMode:', gameMode, 'roomId:', roomId);
 }
 
 function buildGameStateSnapshot(winnerIdx, winnerHandName, winnerPotAmt) {
@@ -1724,9 +1811,7 @@ function applyStateUpdate(state) {
     // NO retornar, continuar procesando para preparar la UI
   }
 
-  console.log(`[CLIENT] 🔄 applyStateUpdate INICIADO - myPlayerId:${myPlayerId} phase:${state.phase} gameRunning:${state.gameRunning}`);
-
-  // Actualizar estado del juego
+  // Actualizar estado del juego (sin duplicaciones)
   phase        = state.phase;
   pot          = state.pot;
   currentBet   = state.currentBet;
@@ -1734,19 +1819,9 @@ function applyStateUpdate(state) {
   actionIndex  = state.actionIndex;
   gameRunning  = state.gameRunning;
 
-  console.log(`[CLIENT] ✅ Estado actualizado: phase=${phase}, pot=$${pot}, actionIndex=${actionIndex}`);
-  pot          = state.pot;
-  currentBet   = state.currentBet;
-  communityCards = state.communityCards || [];
-  actionIndex  = state.actionIndex;
-  gameRunning  = state.gameRunning;
-
-  console.log(`[CLIENT] applyStateUpdate — phase:${phase} action:${actionIndex} yo:${myPlayerId} esmiturno:${actionIndex===myPlayerId} running:${gameRunning}`);
-
   // Sincronizar datos de jugadores — crear slots si no existen (race condition)
   (state.players || []).forEach((sp, i) => {
     if (!players[i]) {
-      // Race condition: gameState llego antes de que initPlayersOnline terminara
       console.warn(`[CLIENT] Creando slot faltante players[${i}] desde gameState`);
       players[i] = {
         name: sp.name || ('Jugador ' + (i + 1)),
@@ -1764,20 +1839,18 @@ function applyStateUpdate(state) {
     // FIX #2: SIEMPRE mostrar las cartas propias, no solo cuando es el turno
     if (i === myPlayerId) {
       players[i].hand = sp.hand || [];
-      console.log(`[CLIENT] ✅ Cartas recibidas (mío - jugador ${i}):`, players[i].hand);
     } else if (phase === 'showdown') {
       players[i].hand = sp.hand || [];
     }
   });
 
-  // Actualizar UI
+  // Actualizar UI — batch para evitar múltiples repaints
   updateUI();
   updateCommunityCards();
   setPhaseLabel(PHASE_LABELS[phase] || phase);
   updateBankUI();
-
-  // SIEMPRE mostrar las cartas del jugador (no solo cuando es su turno)
   showPlayerHand();
+  ensureExitBtnVisible();
 
   if (!gameRunning) {
     hideActionPanel();
@@ -1803,12 +1876,11 @@ function applyStateUpdate(state) {
   }
 
   // Controlar panel de acciones segun turno
-  // Usar state.actionIndex directamente para evitar desincronizacion con variable local
   if (state.actionIndex === myPlayerId) {
     showActionPanel();
-    console.log(`[CLIENT] ✅ Es MI turno — mostrando panel de acciones`);
   } else {
     hideActionPanel();
+    ensureExitBtnVisible();
     const turno = players[state.actionIndex];
     setMsg(turno ? `Turno de ${turno.name}...` : '');
   }
@@ -1832,18 +1904,27 @@ function setOnlineStatus(status, text) {
   const bar = document.getElementById('onlineBar');
   const dot = document.getElementById('onlineDot');
   const label = document.getElementById('onlineStatus');
+  const exitBtn = document.getElementById('exitRoomBtn');
   if(!bar) return;
   if(status === 'connected') {
     bar.style.display = 'block';
+    bar.classList.add('visible');
     dot.className = 'online-dot connected';
     if(label) label.textContent = text || 'Conectado';
+    // Mover exit button arriba del onlineBar (esquina inferior derecha)
+    if(exitBtn) exitBtn.style.bottom = (bar.offsetHeight + 24) + 'px';
   } else if(status === 'connecting') {
     bar.style.display = 'block';
+    bar.classList.add('visible');
     dot.className = 'online-dot';
     dot.style.background = '#ffaa00'; dot.style.boxShadow = '0 0 6px #ffaa00';
     if(label) label.textContent = 'Conectando...';
+    if(exitBtn) exitBtn.style.bottom = '70px';
   } else {
     bar.style.display = 'none';
+    bar.classList.remove('visible');
+    // Restaurar posición original
+    if(exitBtn) exitBtn.style.bottom = '14px';
   }
 }
 
@@ -2838,16 +2919,19 @@ function runActionLoop() {
     }
     showPlayerHand();
     showActionPanel();
+    ensureExitBtnVisible();
 
   } else if(isBot && (gameMode === 'local' || gameMode === 'host')) {
     // Only the host (or local mode) drives bot logic
     hideActionPanel();
+    ensureExitBtnVisible();
     setMsg(`${p.name} está pensando...`);
     setTimeout(() => { botAct(p); }, 350 + Math.random()*350);
 
   } else if(isOtherHuman || isBot) {
     // Client side: another player's turn — just wait for host broadcast
     hideActionPanel();
+    ensureExitBtnVisible();
     setMsg(`Turno de ${p.name}...`);
   }
 
@@ -2935,15 +3019,18 @@ function firstActiveAfter(idx) {
 // ============================================================
 // ACCIÓN DEL JUGADOR HUMANO
 // ============================================================
+let _lastPlayerActionTs = 0;
 function playerAction(action) {
+  // Debounce: ignorar clicks repetidos en menos de 300ms
+  const now = Date.now();
+  if (now - _lastPlayerActionTs < 300) return;
+  _lastPlayerActionTs = now;
+
   if (gameMode === 'client') {
-    // Cliente: el panel solo se muestra cuando es el turno correcto (via applyStateUpdate),
-    // asi que enviamos la accion directamente sin re-verificar actionIndex local
     const raiseAmount = parseInt(document.getElementById('raiseSlider').value) || 0;
-    console.log(`[CLIENT] playerAction: ${action} raise=${raiseAmount} myPlayerId=${myPlayerId}`);
     sendOnlineAction(action, raiseAmount);
     hideActionPanel();
-    setMsg('Accion enviada, esperando...');
+    setMsg('Acción enviada, esperando...');
     return;
   }
 
@@ -3793,6 +3880,12 @@ function showActionPanel() {
 }
 function hideActionPanel() { document.getElementById('actionPanel').style.display = 'none'; }
 
+// FIX: Garantizar que el botón de salir sea siempre visible durante el juego
+function ensureExitBtnVisible() {
+  const btn = document.getElementById('exitRoomBtn');
+  if(btn && gameRunning) btn.style.display = 'block';
+}
+
 // ============================================================
 // BOT 6 - IA QUE APRENDE
 // ============================================================
@@ -3910,6 +4003,11 @@ function addBot6() {
   drawMLChart();
   setMsg(`🤖 Bot ML 🧠 se unió — seed heurístico: ${mlDataset.all.length} muestras | Comienza como NOVATO (40% random)`);
   document.getElementById('addBot6Btn').style.display = 'none';
+  // FIX: siempre garantizar que el botón de salir permanezca visible
+  const exitBtn = document.getElementById('exitRoomBtn');
+  exitBtn.style.display = 'block';
+  // Mover el botón de salir a la esquina inferior derecha cuando las estadísticas están visibles
+  exitBtn.classList.add('stats-visible');
   console.log(`[ML INIT] Bot ML agregado. Exploración inicial: 40% → reducirá 2% por ronda hasta 10%`);
   console.log(`[ML INIT] Ronda  0-2: Novato (errores frecuentes)`);
   console.log(`[ML INIT] Ronda  5-7: Aprendiendo (mejorando)`);
@@ -3987,6 +4085,9 @@ function exitRoom() {
     socket = null;
   }
   gameMode = 'local'; // reset para próxima sesión
+  // Restaurar posición del botón salir (por si venía de modo online)
+  const _exitB = document.getElementById('exitRoomBtn');
+  if(_exitB) _exitB.style.bottom = '14px';
 
   // Detener el juego
   gameRunning = false;
@@ -4098,8 +4199,231 @@ function showExitSummary(humanPlayer, stackFinalArg) {
 }
 
 // ============================================================
-// INIT
+// AUDIO SYSTEM — Casino ambient music (Web Audio API, royalty-free)
+// Genera música procedural: no depende de archivos externos,
+// sin derechos de autor, funciona offline. Estilo casino lounge.
 // ============================================================
+let _audioCtx = null;
+let _audioMuted = false;
+let _audioVolume = 0.35;
+let _audioMasterGain = null;
+let _audioNodes = [];
+let _audioStarted = false;
+
+function getAudioCtx() {
+  if (!_audioCtx) {
+    _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  return _audioCtx;
+}
+
+function initAudio() {
+  if (_audioStarted) return;
+  _audioStarted = true;
+
+  const ctx = getAudioCtx();
+
+  // Master gain
+  _audioMasterGain = ctx.createGain();
+  _audioMasterGain.gain.setValueAtTime(_audioVolume, ctx.currentTime);
+  _audioMasterGain.connect(ctx.destination);
+
+  // ── Capa 1: bajo continuo (jazz/lounge) ──────────────────────
+  // Oscilación entre notas de acorde Am7 (A-C-E-G)
+  const bassNotes = [55, 65.41, 82.41, 73.42]; // A1, C2, E2, D2 (Hz)
+  startBassLine(ctx, bassNotes);
+
+  // ── Capa 2: pad ambiental — acordes suaves ────────────────────
+  startAmbientPad(ctx);
+
+  // ── Capa 3: hi-hat sutil — pulso rítmico ─────────────────────
+  startHihat(ctx);
+
+  // ── Capa 4: piano notes — melodía esporádica ─────────────────
+  startPianoMelody(ctx);
+
+  // Mostrar control de audio
+  document.getElementById('audioControl').style.display = 'flex';
+}
+
+function startBassLine(ctx, notes) {
+  let noteIdx = 0;
+  const bpm = 88;
+  const beatMs = (60 / bpm) * 1000;
+
+  function scheduleNote() {
+    if (!_audioStarted) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(notes[noteIdx % notes.length], ctx.currentTime);
+    noteIdx++;
+
+    gain.gain.setValueAtTime(0, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.18, ctx.currentTime + 0.04);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.55);
+
+    osc.connect(gain);
+    gain.connect(_audioMasterGain);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.6);
+    _audioNodes.push(osc, gain);
+
+    setTimeout(scheduleNote, beatMs * (noteIdx % 4 === 0 ? 2 : 1));
+  }
+  scheduleNote();
+}
+
+function startAmbientPad(ctx) {
+  // Acordes Am7 → Cmaj7 → Em7 → G7 (loop)
+  const chords = [
+    [220, 261.63, 329.63, 392],   // Am7
+    [261.63, 329.63, 392, 493.88], // Cmaj7
+    [329.63, 392, 493.88, 261.63], // Em7
+    [392, 493.88, 261.63, 329.63]  // G7
+  ];
+  let ci = 0;
+
+  function playChord() {
+    if (!_audioStarted) return;
+    const chord = chords[ci % chords.length];
+    ci++;
+    chord.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      // Detune cada voz levemente para efecto "ensemble"
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
+      osc.detune.setValueAtTime((i - 1.5) * 4, ctx.currentTime);
+
+      gain.gain.setValueAtTime(0, ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(0.06, ctx.currentTime + 0.8);
+      gain.gain.setValueAtTime(0.06, ctx.currentTime + 3.0);
+      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 4.5);
+
+      osc.connect(gain);
+      gain.connect(_audioMasterGain);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 5);
+      _audioNodes.push(osc, gain);
+    });
+    setTimeout(playChord, 4400);
+  }
+  playChord();
+}
+
+function startHihat(ctx) {
+  const bpm = 88;
+  const beatMs = (60 / bpm) * 1000;
+  let tick = 0;
+
+  function playHihat() {
+    if (!_audioStarted) return;
+    tick++;
+    // Patrón: 1 fuerte, 2 suave, 3 medio, 4 suave
+    const vol = tick % 4 === 1 ? 0.12 : tick % 4 === 3 ? 0.07 : 0.04;
+
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 0.08, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / data.length, 3);
+    }
+
+    const src = ctx.createBufferSource();
+    const gain = ctx.createGain();
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'highpass';
+    filter.frequency.setValueAtTime(8000, ctx.currentTime);
+
+    src.buffer = buf;
+    gain.gain.setValueAtTime(vol, ctx.currentTime);
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(_audioMasterGain);
+    src.start(ctx.currentTime);
+    _audioNodes.push(src, gain, filter);
+
+    setTimeout(playHihat, beatMs / 2);
+  }
+  playHihat();
+}
+
+function startPianoMelody(ctx) {
+  // Escala Am pentatónica: A C D E G
+  const melody = [440, 523.25, 587.33, 659.25, 783.99, 880, 659.25, 523.25];
+  let mi = 0;
+  const bpm = 88;
+  const beatMs = (60 / bpm) * 1000;
+
+  function playNote() {
+    if (!_audioStarted) return;
+    // No tocar toda la escala — saltear notas aleatoriamente para sonar improvisado
+    if (Math.random() > 0.55) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(melody[mi % melody.length], ctx.currentTime);
+      // Vibrato leve
+      const lfo = ctx.createOscillator();
+      const lfoGain = ctx.createGain();
+      lfo.frequency.setValueAtTime(5, ctx.currentTime);
+      lfoGain.gain.setValueAtTime(2, ctx.currentTime);
+      lfo.connect(lfoGain);
+      lfoGain.connect(osc.frequency);
+      lfo.start(ctx.currentTime);
+      lfo.stop(ctx.currentTime + 0.5);
+
+      gain.gain.setValueAtTime(0, ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(0.09, ctx.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.45);
+
+      osc.connect(gain);
+      gain.connect(_audioMasterGain);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.5);
+      _audioNodes.push(osc, gain, lfo, lfoGain);
+    }
+    mi++;
+    // Intervalo variable: 1 o 2 beats para que suene más natural
+    const interval = beatMs * (Math.random() < 0.3 ? 2 : 1);
+    setTimeout(playNote, interval);
+  }
+  // Arrancar melodía con delay para que el pad entre primero
+  setTimeout(playNote, 1200);
+}
+
+function toggleMute() {
+  if (!_audioCtx) return;
+  _audioMuted = !_audioMuted;
+  const btn = document.getElementById('audioMuteBtn');
+  if (_audioMuted) {
+    _audioMasterGain.gain.linearRampToValueAtTime(0, _audioCtx.currentTime + 0.1);
+    if (btn) btn.textContent = '🔇';
+  } else {
+    _audioMasterGain.gain.linearRampToValueAtTime(_audioVolume, _audioCtx.currentTime + 0.1);
+    if (btn) btn.textContent = '🔊';
+  }
+}
+
+function setVolume(val) {
+  _audioVolume = val / 100;
+  if (_audioMasterGain && !_audioMuted) {
+    _audioMasterGain.gain.linearRampToValueAtTime(_audioVolume, _audioCtx.currentTime + 0.05);
+  }
+}
+
+// Iniciar audio en el primer gesto del usuario (requerido por browsers modernos)
+function _tryStartAudio() {
+  if (_audioStarted) return;
+  initAudio();
+  // Remover listeners una vez iniciado
+  document.removeEventListener('click', _tryStartAudio);
+  document.removeEventListener('touchstart', _tryStartAudio);
+  document.removeEventListener('keydown', _tryStartAudio);
+}
+document.addEventListener('click', _tryStartAudio, { once: true });
+document.addEventListener('touchstart', _tryStartAudio, { once: true });
+document.addEventListener('keydown', _tryStartAudio, { once: true });
 initThree();
 // Don't init players yet — wait for lobby
 document.getElementById('mlLevelSpan').textContent = mlLevel;

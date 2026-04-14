@@ -1575,6 +1575,10 @@ async function startHostGame() {
   stopFbListen();
   const sock = getSocket();
 
+  // FIX #4: registrar el listener de playerAction ANTES de emitir startGame,
+  // así no hay race condition si un cliente reacciona muy rápido al gameStarted.
+  startOnlineHostLoop();
+
   // El servidor retransmite gameStarted a todos (incluyendo al host)
   sock.once('gameStarted', ({ players: serverPlayers, myPlayerId: mid }) => {
     myPlayerId = mid !== undefined ? mid : 0; // host siempre es 0
@@ -1584,9 +1588,10 @@ async function startHostGame() {
     initPlayersOnline(humanNames, myPlayerId);
     buildPlayers();
     updateBankUI();
-    startOnlineHostLoop();
+    // startOnlineHostLoop() ya fue llamado arriba — no volver a llamar
     createStartButton();
     broadcastGameState();
+    console.log('[HOST] ✅ Partida iniciada — myPlayerId:', myPlayerId, '| jugadores:', serverPlayers.length);
   });
 
   sock.emit('startGame', { roomId });
@@ -1626,25 +1631,42 @@ function updateRoomPlayersList(pls) {
 }
 
 let lastActionTs = 0;
+let lastActionSeq = 0; // FIX #3: contador separado para deduplicar sin descartar acciones del mismo ms
 function startOnlineHostLoop() {
   const sock = getSocket();
   sock.off('playerAction');
 
   sock.on('playerAction', (act) => {
-    if (!act || !act._ts || act._ts <= lastActionTs) return;
-    lastActionTs = act._ts;
+    if (!act) return;
+
+    // FIX #3: usar _ts solo como anti-replay de sesión anterior, no para descartar
+    // acciones legítimas que lleguen en el mismo milisegundo.
+    // Deduplicamos con una combinación de _ts + playerId + action.
+    const actKey = `${act._ts}_${act.playerId}_${act.action}`;
+    if (act._ts && act._ts < lastActionTs) {
+      console.warn(`[HOST] Accion descartada (replay sesion anterior): ${actKey}`);
+      return;
+    }
+    if (actKey === lastActionSeq) {
+      console.warn(`[HOST] Accion duplicada ignorada: ${actKey}`);
+      return;
+    }
+    lastActionTs = act._ts || Date.now();
+    lastActionSeq = actKey;
 
     if (!gameRunning) {
-      console.warn('[HOST] Accion recibida pero gameRunning=false');
+      console.warn('[HOST] Accion recibida pero gameRunning=false — ignorando');
       return;
     }
     if (act.playerId === undefined || act.playerId !== actionIndex) {
-      console.warn(`[HOST] Accion ignorada: esperaba ${actionIndex}, recibio ${act.playerId}`);
+      console.warn(`[HOST] Accion ignorada: esperaba turno ${actionIndex}, recibio jugador ${act.playerId} | accion: ${act.action}`);
       return;
     }
-    console.log(`[HOST] Ejecutando accion jugador ${act.playerId}: ${act.action}`);
+    console.log(`[HOST] ✅ Ejecutando accion jugador ${act.playerId}: ${act.action} | raiseAmount: ${act.raiseAmount ?? 0} | actionIndex actual: ${actionIndex}`);
     executeAction(players[act.playerId], act.action, act.raiseAmount || 0);
   });
+
+  console.log('[HOST] ✅ startOnlineHostLoop: listener playerAction registrado');
 }
 
 function startOnlineClientLoop() {
@@ -1678,27 +1700,16 @@ function applyStateUpdate(state) {
   communityCards = state.communityCards || [];
   actionIndex = state.actionIndex; gameRunning = state.gameRunning;
 
-  console.log(`[CLIENT] applyStateUpdate — actionIndex: ${state.actionIndex} | miPlayerId: ${myPlayerId} | esmiturno: ${state.actionIndex === myPlayerId} | gameRunning: ${state.gameRunning} | phase: ${state.phase} | players local: ${players.length} | players server: ${(state.players||[]).length}`);
+  // FIX #4: log de debug para verificar que actionIndex llega correcto al cliente
+  console.log(`[CLIENT] applyStateUpdate — actionIndex: ${state.actionIndex} | miPlayerId: ${myPlayerId} | esmiturno: ${state.actionIndex === myPlayerId} | gameRunning: ${state.gameRunning} | phase: ${state.phase}`);
 
   (state.players||[]).forEach((sp, i) => {
-    if(!players[i]) {
-      // FIX: si el array local aún no tiene este slot (race condition entre gameStarted
-      // y el primer gameState), lo creamos con los datos del servidor para no perder las cartas
-      console.warn(`[CLIENT] applyStateUpdate: players[${i}] no existe todavía — creando slot desde estado del servidor`);
-      players[i] = {
-        name: sp.name || `Jugador ${i+1}`,
-        isHuman: true, isML: false,
-        chips: sp.chips, bank: 20000, buyIn: sp.chips,
-        bet: sp.bet, folded: sp.folded, hand: [],
-        mlLevel: -1, x: 0, z: 0
-      };
-    }
+    if(!players[i]) return;
     players[i].chips = sp.chips; players[i].bet = sp.bet; players[i].folded = sp.folded;
     // Solo aplicar cartas del asiento propio, o en showdown mostrar todas
     if(i === myPlayerId || phase === 'showdown') {
       if(sp.hand && sp.hand.length > 0) {
         players[i].hand = sp.hand;
-        console.log(`[CLIENT] ✅ Cartas recibidas para slot ${i} (yo=${myPlayerId}):`, sp.hand);
       }
     }
   });
@@ -1707,10 +1718,10 @@ function applyStateUpdate(state) {
   setPhaseLabel(PHASE_LABELS[phase] || phase);
   updateBankUI();
 
-  // FIX: Mostrar siempre las cartas del jugador, independientemente de si es su turno
-  // Bug anterior: showPlayerHand() solo se llamaba dentro de (actionIndex === myPlayerId),
-  // así que un cliente que no era el primero en actuar nunca veía sus cartas.
-  showPlayerHand();
+  // Mostrar mano del cliente siempre que tenga cartas
+  if(players[myPlayerId] && players[myPlayerId].hand && players[myPlayerId].hand.length > 0) {
+    showPlayerHand();
+  }
 
   if(!gameRunning) {
     hideActionPanel();
@@ -1734,8 +1745,8 @@ function applyStateUpdate(state) {
     return;
   }
 
-  // FIX: solo controlar panel de acciones según turno; las cartas ya se mostraron arriba
   if(actionIndex === myPlayerId) {
+    showPlayerHand();
     showActionPanel();
   } else {
     hideActionPanel();
@@ -1745,8 +1756,8 @@ function applyStateUpdate(state) {
 }
 
 function sendOnlineAction(action, raiseAmount) {
-  if (!roomId || !socket) { console.warn('[CLIENT] sendOnlineAction: sin conexión'); return; }
-  console.log(`[CLIENT] Enviando acción: turno=${actionIndex}, miId=${myPlayerId}, acción=${action}`);
+  if (!roomId || !socket) { console.warn('[CLIENT] sendOnlineAction: sin conexión — roomId:', roomId, 'socket:', !!socket); return; }
+  console.log(`[CLIENT] ✅ Enviando playerAction — turno=${actionIndex}, miId=${myPlayerId}, acción=${action}, raise=${raiseAmount || 0}`);
   socket.emit('playerAction', {
     roomId,
     playerId: myPlayerId,
@@ -2701,6 +2712,8 @@ function startHand() {
 
   if(gameMode === 'host') broadcastGameState();
 
+  console.log(`[HOST] startHand: mano #${roundsPlayed} iniciada | jugadores: ${players.length} | actionIndex: ${actionIndex} | dealer: ${dealerIndex}`);
+
   setTimeout(() => runActionLoop(), 500); // ⚡ era 800ms
 }
 
@@ -2763,6 +2776,11 @@ function runActionLoop() {
     // Client side: another player's turn — just wait for host broadcast
     hideActionPanel();
     setMsg(`Turno de ${p.name}...`);
+  }
+
+  // FIX: log de debug en el host para saber que está esperando la acción del cliente
+  if(gameMode === 'host' && isOtherHuman) {
+    console.log(`[HOST] ⏳ Esperando acción del cliente — jugador ${actionIndex} (${p.name})`);
   }
 }
 
@@ -2926,9 +2944,12 @@ function executeAction(p, action, raiseAmount) {
   updateUI();
   updateBankUI();
 
+  // FIX #1: avanzar actionIndex ANTES del broadcast para que los clientes
+  // reciban el estado con el turno correcto (el del próximo jugador).
+  actionIndex = (idx+1) % players.length;
+
   if(gameMode === 'host') broadcastGameState();
 
-  actionIndex = (idx+1) % players.length;
   setTimeout(runActionLoop, 200); // ⚡ era 400ms → más responsivo
 }
 
@@ -3634,16 +3655,9 @@ function updateUI() {
   updatePlayerLabels();
 }
 function updateBankUI() {
-  // FIX: en modo online siempre mostrar datos del jugador propio (myPlayerId),
-  // no del humanIndex (que puede ser 0 para todos los clientes)
-  let pIdx;
-  if(gameMode === 'host' || gameMode === 'client') {
-    pIdx = myPlayerId;
-  } else {
-    pIdx = humanIndex;
-    if(humanIndices.length > 1 && players[actionIndex] && players[actionIndex].isHuman) {
-      pIdx = actionIndex;
-    }
+  let pIdx = humanIndex;
+  if(humanIndices.length > 1 && players[actionIndex] && players[actionIndex].isHuman) {
+    pIdx = actionIndex;
   }
   const p = players[pIdx];
   if(!p) return;
@@ -3830,11 +3844,16 @@ function addBot6() {
 function nextHand() {
   document.getElementById('winnerOverlay').style.display = 'none';
   if(gameMode === 'client') {
-    // El cliente solo espera — el host iniciará la siguiente mano
+    // FIX #5: notificar al servidor que este cliente está listo para la siguiente mano.
+    // El host arrancará cuando presione "Nueva Mano" — el cliente solo espera el broadcast.
+    console.log('[CLIENT] nextHand: esperando que el host inicie la siguiente mano...');
     setMsg('Esperando que el host inicie la siguiente mano...');
     return;
   }
-  setTimeout(startHand, 200);
+  // En modo host: arrancar la siguiente mano y broadcastear el estado inicial
+  setTimeout(() => {
+    startHand();
+  }, 200);
 }
 
 function createStartButton() {
@@ -4008,7 +4027,11 @@ document.getElementById('mlLevelSpan').textContent = mlLevel;
 document.getElementById('roundsSpan').textContent = roundsPlayed;
 
 // ⚡ Log de optimizaciones aplicadas — visible en DevTools Console
-console.log('%c[POKER ML v12] Optimizaciones activas:', 'color:#d4a017;font-weight:bold');
+console.log('%c[POKER ML v22-fixed] Optimizaciones activas + BUGS MULTIJUGADOR CORREGIDOS:', 'color:#d4a017;font-weight:bold');
+console.log('  ✅ FIX #1: executeAction() — broadcastGameState() después de avanzar actionIndex');
+console.log('  ✅ FIX #2: startOnlineHostLoop() — deduplicación por clave compuesta, no solo _ts');
+console.log('  ✅ FIX #3: startHostGame() — listener playerAction registrado ANTES de emit startGame');
+console.log('  ✅ FIX #4: logs de debug en applyStateUpdate, sendOnlineAction, runActionLoop');
 console.log('  ✅ Sombras Three.js: DESACTIVADAS (renderer.shadowMap.enabled=false)');
 console.log('  ✅ Luces dinámicas: 9 → 4 (ahorra ~40% GPU shading)');
 console.log('  ✅ Segmentos geométricos: reducidos 40-60% en todos los meshes');

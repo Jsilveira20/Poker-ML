@@ -1710,6 +1710,12 @@ function buildGameStateSnapshot(winnerIdx, winnerHandName, winnerPotAmt) {
 function applyStateUpdate(state) {
   if (!state) return;
 
+  // FIX #1: Safety check - asegurar que myPlayerId sea válido
+  if (myPlayerId === undefined || myPlayerId === null || myPlayerId < 0) {
+    console.error('[CLIENT] CRITICAL: myPlayerId es inválido:', myPlayerId);
+    return;
+  }
+
   // Actualizar estado del juego
   phase        = state.phase;
   pot          = state.pot;
@@ -1738,14 +1744,12 @@ function applyStateUpdate(state) {
     players[i].folded = sp.folded;
     players[i].name   = sp.name || players[i].name;
 
-    // Cartas: solo aplicar las propias (o todas en showdown)
-    if (i === myPlayerId || phase === 'showdown') {
-      if (sp.hand && sp.hand.length > 0) {
-        players[i].hand = sp.hand;
-        if (i === myPlayerId) {
-          console.log(`[CLIENT] ✅ Cartas recibidas:`, sp.hand);
-        }
-      }
+    // FIX #2: SIEMPRE mostrar las cartas propias, no solo cuando es el turno
+    if (i === myPlayerId) {
+      players[i].hand = sp.hand || [];
+      console.log(`[CLIENT] ✅ Cartas recibidas (mío - jugador ${i}):`, players[i].hand);
+    } else if (phase === 'showdown') {
+      players[i].hand = sp.hand || [];
     }
   });
 
@@ -2613,7 +2617,8 @@ function initPlayersOnline(humanNames, myIdx) {
       chips: 1000, bank: 20000,
       buyIn: BUY_IN,
       bet: 0, folded: false, hand: [],
-      mlLevel: -1, x: 0, z: 0
+      mlLevel: -1, x: 0, z: 0,
+      _cardsSynced: false
     });
   });
 

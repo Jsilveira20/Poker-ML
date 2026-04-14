@@ -1685,13 +1685,20 @@ function startOnlineClientLoop() {
   sock.off('gameState');
 
   sock.on('gameState', (state) => {
-    if (!state) return;
-    // Doble check: asegurarse que gameMode es 'client' cuando llega el estado
-    if (gameMode !== 'client') return;
+    if (!state) {
+      console.warn('[CLIENT] gameState recibido pero es NULL/undefined');
+      return;
+    }
+    console.log('[CLIENT] 📨 gameState RECIBIDO - fase:', state.phase, 'action:', state.actionIndex, 'yo:', myPlayerId);
+    if (gameMode !== 'client') {
+      console.warn('[CLIENT] gameState rechazado - gameMode es', gameMode, 'no client');
+      return;
+    }
     applyStateUpdate(state);
   });
 
-  console.log('[CLIENT] startOnlineClientLoop: escuchando gameState');
+  console.log('[CLIENT] 👂 startOnlineClientLoop: escuchando gameState en modo client');
+  console.log('[CLIENT] Mi ID:', myPlayerId, 'gameMode:', gameMode, 'roomId:', roomId);
 }
 
 function buildGameStateSnapshot(winnerIdx, winnerHandName, winnerPotAmt) {
@@ -1710,14 +1717,24 @@ function buildGameStateSnapshot(winnerIdx, winnerHandName, winnerPotAmt) {
 function applyStateUpdate(state) {
   if (!state) return;
 
-  // FIX #1: Safety check - asegurar que myPlayerId sea válido
-  if (myPlayerId === undefined || myPlayerId === null || myPlayerId < 0) {
-    console.error('[CLIENT] CRITICAL: myPlayerId es inválido:', myPlayerId);
-    return;
+  // FIX #1 MEJORADO: Si myPlayerId aún no se asignó, usar el índice del primer gameState
+  // Esto permite que clientes se sincronicen incluso si llega gameState antes de roomJoined
+  if (myPlayerId === undefined || myPlayerId === null) {
+    console.warn('[CLIENT] ⚠️ myPlayerId no inicializado aún, esperando roomJoined...');
+    // NO retornar, continuar procesando para preparar la UI
   }
+
+  console.log(`[CLIENT] 🔄 applyStateUpdate INICIADO - myPlayerId:${myPlayerId} phase:${state.phase} gameRunning:${state.gameRunning}`);
 
   // Actualizar estado del juego
   phase        = state.phase;
+  pot          = state.pot;
+  currentBet   = state.currentBet;
+  communityCards = state.communityCards || [];
+  actionIndex  = state.actionIndex;
+  gameRunning  = state.gameRunning;
+
+  console.log(`[CLIENT] ✅ Estado actualizado: phase=${phase}, pot=$${pot}, actionIndex=${actionIndex}`);
   pot          = state.pot;
   currentBet   = state.currentBet;
   communityCards = state.communityCards || [];
@@ -3720,13 +3737,25 @@ function showPlayerHand() {
   // In online mode show this client's own hand; in local mode show the current human's hand
   let pIdx = humanIndex;
   if(gameMode === 'host' || gameMode === 'client') {
-    pIdx = myPlayerId;
+    pIdx = (myPlayerId !== undefined && myPlayerId >= 0) ? myPlayerId : 0;
   } else if(humanIndices.length > 1 && players[actionIndex] && players[actionIndex].isHuman) {
     pIdx = actionIndex;
   }
+  
+  if (!players || players.length === 0) {
+    document.getElementById('playerHand').innerHTML = '';
+    return;
+  }
+  if (pIdx < 0 || pIdx >= players.length) {
+    document.getElementById('playerHand').innerHTML = '';
+    return;
+  }
+  
   const p = players[pIdx];
   let html = '';
-  (p && p.hand||[]).forEach(c => html += cardHTML(c));
+  if (p && p.hand && Array.isArray(p.hand) && p.hand.length > 0) {
+    p.hand.forEach(c => html += cardHTML(c));
+  }
   document.getElementById('playerHand').innerHTML = html;
 }
 

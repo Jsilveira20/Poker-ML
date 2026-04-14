@@ -1173,6 +1173,13 @@ function getBotNamePool() {
 let phase = 'waiting', actionIndex = 0, dealerIndex = 0;
 let players = [], humanIndex = 0, humanIndices = [0]; // humanIndices for multi-player local mode
 let gameRunning = false;
+
+// ── Online globals — declarados explicitamente para evitar perdida en recarga ──
+let gameMode     = 'local';  // 'local' | 'host' | 'client'
+let myPlayerId   = 0;        // indice de asiento de ESTE cliente
+let isHost       = false;
+let roomId       = null;
+let myPlayerName = '';
 // roundChecked[playerIdx] = true when they've acted this betting round without raising
 let roundActed = {};
 let lastRaiser = -1;
@@ -1350,34 +1357,37 @@ let selectedMode = 'local';
 
 // Check URL for room code
 (function checkURL() {
-  // Soporta AMBOS formatos de link:
-  //   ?room=ABC123  (query string — funciona en cualquier servidor)
-  //   #room=ABC123  (hash — funciona en file:// también)
+  // Soporta ?room=ABC123 (query string) y #room=ABC123 (hash para file://)
   let code = null;
 
-  // Prioridad 1: query string ?room=
   const params = new URLSearchParams(window.location.search);
   const qroom = params.get('room');
-  if(qroom && qroom.length === 6) code = qroom.toUpperCase();
+  if (qroom && qroom.length === 6) code = qroom.toUpperCase();
 
-  // Prioridad 2: hash #room=
-  if(!code) {
+  if (!code) {
     const hash = window.location.hash;
-    if(hash && hash.startsWith('#room=')) {
+    if (hash && hash.startsWith('#room=')) {
       const hcode = hash.slice(6).toUpperCase();
-      if(hcode.length === 6) code = hcode;
+      if (hcode.length === 6) code = hcode;
     }
   }
 
-  if(code) {
-    console.log('[URL] Código de sala detectado en URL:', code);
+  if (code) {
+    console.log('[URL] Sala detectada en URL:', code);
+    // Guardar nombre previo en sessionStorage para sobrevivir recargas
+    const savedName = sessionStorage.getItem('pokerPlayerName') || '';
     setTimeout(() => {
       selectMode('join');
-      const input = document.getElementById('roomCodeInput');
-      if(input) input.value = code;
-      // Auto-focus en el campo de nombre si está vacío
+      const codeInput = document.getElementById('roomCodeInput');
+      if (codeInput) codeInput.value = code;
       const nameInput = document.getElementById('playerNameInput');
-      if(nameInput && !nameInput.value.trim()) nameInput.focus();
+      if (nameInput) {
+        if (savedName) {
+          nameInput.value = savedName;
+        } else {
+          nameInput.focus();
+        }
+      }
     }, 150);
   }
 })();
@@ -1424,6 +1434,8 @@ function removeExtraPlayer(idx) {
 function lobbyStart() {
   const name = document.getElementById('playerNameInput').value.trim() || 'Jugador';
   myPlayerName = name;
+  // Guardar nombre en sessionStorage para sobrevivir recargas accidentales
+  sessionStorage.setItem('pokerPlayerName', name);
 
   if(selectedMode === 'local') {
     startLocalGame(name);
@@ -1531,67 +1543,63 @@ async function createOnlineRoom(name) {
 }
 
 async function joinOnlineRoom(name, code) {
-  roomId = code.toUpperCase();
-  isHost = false;
-  gameMode = 'client';
+  // Limpiar listeners previos para evitar duplicados en reconexion
+  const sock = getSocket();
+  sock.off('roomJoined');
+  sock.off('gameStarted');
+  sock.off('gameState');
+
+  roomId      = code.toUpperCase();
+  isHost      = false;
+  gameMode    = 'client';
+  myPlayerName = name;
 
   setOnlineStatus('connecting');
   document.getElementById('waitingMsg').style.display = 'block';
   document.getElementById('waitingMsg').textContent = '⏳ Conectando a sala ' + roomId + '...';
 
-  const sock = getSocket();
-
-  // Remover listeners previos para evitar duplicados en reconexión
-  sock.off('gameStarted');
-
-  sock.once('roomJoined', ({ playerId, players }) => {
+  sock.once('roomJoined', ({ playerId, players: serverPlayers }) => {
     myPlayerId = playerId;
+    console.log('[CLIENT] roomJoined — soy jugador', myPlayerId, '| gameMode:', gameMode);
     const newUrl = window.location.origin + window.location.pathname + '?room=' + roomId;
     window.history.replaceState({}, '', newUrl);
     document.getElementById('roomCodeDisplay').textContent = roomId;
     document.getElementById('roomInfo').style.display = 'block';
     document.getElementById('waitingMsg').textContent = '✅ Unido a sala ' + roomId + '! Esperando que el host inicie...';
     document.getElementById('lobbyStartBtn').style.display = 'none';
-    updateRoomPlayersList(players);
+    updateRoomPlayersList(serverPlayers);
     setOnlineStatus('connected', `Sala ${roomId} — Jugador ${myPlayerId + 1}`);
-    console.log('[Unirse] ✅ Unido como jugador', myPlayerId);
   });
 
-  // Usar .on (no .once) para no perder el evento si llega después de la re-render
+  // .on en lugar de .once — si el evento llega antes del render no se pierde
   sock.on('gameStarted', ({ players: serverPlayers, myPlayerId: mid }) => {
-    // Sólo procesar si somos un cliente (no el host)
-    if (gameMode !== 'client') return;
+    if (gameMode !== 'client') return; // el host tambien recibe este evento, ignorar
     myPlayerId = mid;
-    console.log('[CLIENT] gameStarted recibido, soy jugador', myPlayerId);
+    console.log('[CLIENT] gameStarted — soy jugador', myPlayerId, '| total jugadores:', serverPlayers.length);
     startClientGame({ players: serverPlayers });
   });
 
   sock.emit('joinRoom', { roomId, name });
 }
 
-
-
 async function startHostGame() {
   stopFbListen();
   const sock = getSocket();
 
-  // FIX #4: registrar el listener de playerAction ANTES de emitir startGame,
-  // así no hay race condition si un cliente reacciona muy rápido al gameStarted.
+  // Registrar listener de playerAction ANTES de emitir startGame
   startOnlineHostLoop();
 
-  // El servidor retransmite gameStarted a todos (incluyendo al host)
   sock.once('gameStarted', ({ players: serverPlayers, myPlayerId: mid }) => {
-    myPlayerId = mid !== undefined ? mid : 0; // host siempre es 0
+    myPlayerId = mid !== undefined ? mid : 0;
     const humanNames = serverPlayers.map(p => p.name);
     document.getElementById('lobbyOverlay').style.display = 'none';
     setOnlineStatus('connected', `Sala: ${roomId} | ${serverPlayers.length} jugadores`);
     initPlayersOnline(humanNames, myPlayerId);
     buildPlayers();
     updateBankUI();
-    // startOnlineHostLoop() ya fue llamado arriba — no volver a llamar
     createStartButton();
     broadcastGameState();
-    console.log('[HOST] ✅ Partida iniciada — myPlayerId:', myPlayerId, '| jugadores:', serverPlayers.length);
+    console.log('[HOST] gameStarted — myPlayerId:', myPlayerId, '| jugadores:', serverPlayers.length);
   });
 
   sock.emit('startGame', { roomId });
@@ -1599,28 +1607,34 @@ async function startHostGame() {
 
 function startClientGame(roomState) {
   stopFbListen();
+
+  // Asegurarse que gameMode es 'client' aunque se llame desde un contexto inesperado
+  gameMode = 'client';
+
   document.getElementById('lobbyOverlay').style.display = 'none';
   setOnlineStatus('connected', `Sala: ${roomId} | Jugador ${myPlayerId + 1}`);
 
   const allPlayers = roomState.players
     ? (Array.isArray(roomState.players) ? roomState.players : Object.values(roomState.players))
     : [];
+
   initPlayersOnline(allPlayers.map(p => p.name), myPlayerId);
   buildPlayers();
   updateBankUI();
 
-  // Mostrar mensaje de espera hasta que el host inicie la primera mano
-  setPhaseLabel('Texas Hold\'em ML');
+  setPhaseLabel("Texas Hold'em ML");
   setMsg('Esperando que el host inicie la primera mano...');
   document.getElementById('exitRoomBtn').style.display = 'block';
 
   startOnlineClientLoop();
 
-  // Pedir el ultimo estado al servidor por si ya hubo un broadcast
+  // Pedir ultimo estado por si el host ya broadcasto antes de que terminara la conexion
   if (socket) socket.emit('requestState', { roomId });
+
+  console.log('[CLIENT] startClientGame OK — myPlayerId:', myPlayerId, '| players:', allPlayers.length);
 }
 
-function hostPollPlayers() {} // replaced by fbListen
+function hostPollPlayers() {} // reemplazado por Socket.IO
 
 function updateRoomPlayersList(pls) {
   const el = document.getElementById('roomPlayersList');
@@ -1631,7 +1645,7 @@ function updateRoomPlayersList(pls) {
 }
 
 let lastActionTs = 0;
-let lastActionSeq = 0; // FIX #3: contador separado para deduplicar sin descartar acciones del mismo ms
+let lastActionSeq = 0;
 function startOnlineHostLoop() {
   const sock = getSocket();
   sock.off('playerAction');
@@ -1639,16 +1653,13 @@ function startOnlineHostLoop() {
   sock.on('playerAction', (act) => {
     if (!act) return;
 
-    // FIX #3: usar _ts solo como anti-replay de sesión anterior, no para descartar
-    // acciones legítimas que lleguen en el mismo milisegundo.
-    // Deduplicamos con una combinación de _ts + playerId + action.
     const actKey = `${act._ts}_${act.playerId}_${act.action}`;
     if (act._ts && act._ts < lastActionTs) {
-      console.warn(`[HOST] Accion descartada (replay sesion anterior): ${actKey}`);
+      console.warn('[HOST] Accion descartada (replay sesion anterior):', actKey);
       return;
     }
     if (actKey === lastActionSeq) {
-      console.warn(`[HOST] Accion duplicada ignorada: ${actKey}`);
+      console.warn('[HOST] Accion duplicada ignorada:', actKey);
       return;
     }
     lastActionTs = act._ts || Date.now();
@@ -1659,14 +1670,14 @@ function startOnlineHostLoop() {
       return;
     }
     if (act.playerId === undefined || act.playerId !== actionIndex) {
-      console.warn(`[HOST] Accion ignorada: esperaba turno ${actionIndex}, recibio jugador ${act.playerId} | accion: ${act.action}`);
+      console.warn(`[HOST] Accion ignorada: esperaba turno ${actionIndex}, recibio jugador ${act.playerId}`);
       return;
     }
-    console.log(`[HOST] ✅ Ejecutando accion jugador ${act.playerId}: ${act.action} | raiseAmount: ${act.raiseAmount ?? 0} | actionIndex actual: ${actionIndex}`);
+    console.log(`[HOST] Ejecutando accion jugador ${act.playerId}: ${act.action} raise=${act.raiseAmount ?? 0}`);
     executeAction(players[act.playerId], act.action, act.raiseAmount || 0);
   });
 
-  console.log('[HOST] ✅ startOnlineHostLoop: listener playerAction registrado');
+  console.log('[HOST] startOnlineHostLoop: listener playerAction registrado');
 }
 
 function startOnlineClientLoop() {
@@ -1675,11 +1686,13 @@ function startOnlineClientLoop() {
 
   sock.on('gameState', (state) => {
     if (!state) return;
+    // Doble check: asegurarse que gameMode es 'client' cuando llega el estado
+    if (gameMode !== 'client') return;
     applyStateUpdate(state);
   });
-}
 
-// broadcastGameState is defined above using Socket.IO
+  console.log('[CLIENT] startOnlineClientLoop: escuchando gameState');
+}
 
 function buildGameStateSnapshot(winnerIdx, winnerHandName, winnerPotAmt) {
   return {
@@ -1689,75 +1702,103 @@ function buildGameStateSnapshot(winnerIdx, winnerHandName, winnerPotAmt) {
     winnerPot: winnerPotAmt || pot,
     players: players.map((p) => ({
       name: p.name, chips: p.chips, bet: p.bet, folded: p.folded,
-      hand: p.hand  // mandamos todas las cartas; el cliente solo usa las suyas (excepto showdown)
+      hand: p.hand  // todas las cartas — el cliente filtra y usa solo las suyas
     }))
   };
 }
 
 function applyStateUpdate(state) {
-  if(!state) return;
-  phase = state.phase; pot = state.pot; currentBet = state.currentBet;
+  if (!state) return;
+
+  // Actualizar estado del juego
+  phase        = state.phase;
+  pot          = state.pot;
+  currentBet   = state.currentBet;
   communityCards = state.communityCards || [];
-  actionIndex = state.actionIndex; gameRunning = state.gameRunning;
+  actionIndex  = state.actionIndex;
+  gameRunning  = state.gameRunning;
 
-  // FIX #4: log de debug para verificar que actionIndex llega correcto al cliente
-  console.log(`[CLIENT] applyStateUpdate — actionIndex: ${state.actionIndex} | miPlayerId: ${myPlayerId} | esmiturno: ${state.actionIndex === myPlayerId} | gameRunning: ${state.gameRunning} | phase: ${state.phase}`);
+  console.log(`[CLIENT] applyStateUpdate — phase:${phase} action:${actionIndex} yo:${myPlayerId} esmiturno:${actionIndex===myPlayerId} running:${gameRunning}`);
 
-  (state.players||[]).forEach((sp, i) => {
-    if(!players[i]) return;
-    players[i].chips = sp.chips; players[i].bet = sp.bet; players[i].folded = sp.folded;
-    // Solo aplicar cartas del asiento propio, o en showdown mostrar todas
-    if(i === myPlayerId || phase === 'showdown') {
-      if(sp.hand && sp.hand.length > 0) {
+  // Sincronizar datos de jugadores — crear slots si no existen (race condition)
+  (state.players || []).forEach((sp, i) => {
+    if (!players[i]) {
+      // Race condition: gameState llego antes de que initPlayersOnline terminara
+      console.warn(`[CLIENT] Creando slot faltante players[${i}] desde gameState`);
+      players[i] = {
+        name: sp.name || ('Jugador ' + (i + 1)),
+        isHuman: true, isML: false,
+        chips: sp.chips, bank: 20000, buyIn: sp.chips || 1000,
+        bet: sp.bet, folded: sp.folded, hand: [],
+        mlLevel: -1, x: 0, z: 0
+      };
+    }
+    players[i].chips  = sp.chips;
+    players[i].bet    = sp.bet;
+    players[i].folded = sp.folded;
+    players[i].name   = sp.name || players[i].name;
+
+    // Cartas: solo aplicar las propias (o todas en showdown)
+    if (i === myPlayerId || phase === 'showdown') {
+      if (sp.hand && sp.hand.length > 0) {
         players[i].hand = sp.hand;
+        if (i === myPlayerId) {
+          console.log(`[CLIENT] ✅ Cartas recibidas:`, sp.hand);
+        }
       }
     }
   });
 
-  updateUI(); updateCommunityCards();
+  // Actualizar UI
+  updateUI();
+  updateCommunityCards();
   setPhaseLabel(PHASE_LABELS[phase] || phase);
   updateBankUI();
 
-  // Mostrar mano del cliente siempre que tenga cartas
-  if(players[myPlayerId] && players[myPlayerId].hand && players[myPlayerId].hand.length > 0) {
-    showPlayerHand();
-  }
+  // SIEMPRE mostrar las cartas del jugador (no solo cuando es su turno)
+  showPlayerHand();
 
-  if(!gameRunning) {
+  if (!gameRunning) {
     hideActionPanel();
-    // Si viene info de ganador, mostrar overlay en cliente
-    if(state.winner !== undefined && state.winner !== null) {
+    // Mostrar overlay ganador si viene en el estado
+    if (state.winner !== undefined && state.winner !== null) {
       const w = players[state.winner];
-      if(w) {
+      if (w) {
         const isMyWin = state.winner === myPlayerId;
-        document.getElementById('winnerTitle').textContent = isMyWin ? '\uD83C\uDFC6 \u00A1Ganaste!' : (w.isHuman ? `\uD83C\uDFC6 \u00A1Gan\u00F3 ${w.name}!` : '\uD83C\uDCCF Gan\u00F3 el Bot');
+        document.getElementById('winnerTitle').textContent = isMyWin
+          ? '\uD83C\uDFC6 \u00A1Ganaste!'
+          : (w.isHuman ? `\uD83C\uDFC6 \u00A1Gan\u00F3 ${w.name}!` : '\uD83C\uDCCF Gan\u00F3 el Bot');
         document.getElementById('winnerName').textContent = w.name;
         document.getElementById('winnerHand').textContent = state.winnerHandName || '';
         document.getElementById('winnerPot').textContent = `Pozo ganado: $${state.winnerPot || pot}`;
-        // Mostrar manos en el overlay si tenemos cartas
         const active = players.filter(p => !p.folded);
-        if(active.length > 0) showAllHands(active, w);
+        if (active.length > 0) showAllHands(active, w);
         const winBtn = document.querySelector('#winnerBox button');
-        if(winBtn) winBtn.textContent = 'OK';
+        if (winBtn) winBtn.textContent = 'OK';
         document.getElementById('winnerOverlay').style.display = 'flex';
       }
     }
     return;
   }
 
-  if(actionIndex === myPlayerId) {
-    showPlayerHand();
+  // Controlar panel de acciones segun turno
+  // Usar state.actionIndex directamente para evitar desincronizacion con variable local
+  if (state.actionIndex === myPlayerId) {
     showActionPanel();
+    console.log(`[CLIENT] ✅ Es MI turno — mostrando panel de acciones`);
   } else {
     hideActionPanel();
-    const turno = players[actionIndex];
+    const turno = players[state.actionIndex];
     setMsg(turno ? `Turno de ${turno.name}...` : '');
   }
 }
 
 function sendOnlineAction(action, raiseAmount) {
-  if (!roomId || !socket) { console.warn('[CLIENT] sendOnlineAction: sin conexión — roomId:', roomId, 'socket:', !!socket); return; }
-  console.log(`[CLIENT] ✅ Enviando playerAction — turno=${actionIndex}, miId=${myPlayerId}, acción=${action}, raise=${raiseAmount || 0}`);
+  if (!roomId || !socket) {
+    console.warn('[CLIENT] sendOnlineAction: sin conexion — roomId:', roomId, 'socket:', !!socket);
+    return;
+  }
+  console.log(`[CLIENT] Enviando accion: ${action} raise=${raiseAmount||0} playerId=${myPlayerId}`);
   socket.emit('playerAction', {
     roomId,
     playerId: myPlayerId,
@@ -2645,6 +2686,11 @@ function initBotStats(name) {
 }
 
 function startHand() {
+  // El cliente NUNCA corre la logica de mano — solo escucha gameState del host
+  if (gameMode === 'client') {
+    console.warn('[CLIENT] startHand() bloqueado — solo el host arranca manos');
+    return;
+  }
   if(players.every(p => p.bank < 100 && p.chips < 100)) {
     setMsg('¡Juego terminado! Todos sin fondos.'); return;
   }
@@ -2727,7 +2773,12 @@ function postBlind(idx, amount) {
 // LOOP DE ACCIÓN
 // ============================================================
 function runActionLoop() {
-  if(!gameRunning) return;
+  if (!gameRunning) return;
+  // El cliente NUNCA corre el loop — su UI la maneja applyStateUpdate via gameState
+  if (gameMode === 'client') {
+    console.warn('[CLIENT] runActionLoop() bloqueado — esperando gameState del host');
+    return;
+  }
 
   const activePlayers = players.filter(p => !p.folded);
   if(activePlayers.length === 1) {
@@ -2863,29 +2914,23 @@ function firstActiveAfter(idx) {
 // ACCIÓN DEL JUGADOR HUMANO
 // ============================================================
 function playerAction(action) {
-  const p = players[actionIndex];
-  if(!p) return;
-
-  // Only allow action if it's this client's own seat
-  // In local mode: any human seat is fine
-  // In online mode: must be myPlayerId's turn
-  const isMyTurn = gameMode === 'local'
-    ? p.isHuman
-    : (actionIndex === myPlayerId);
-
-  if(!isMyTurn) return;
-
-  if(gameMode === 'client') {
-    // CLIENT: send action to host via P2P, then wait for state update
-    const raiseAmount = parseInt(document.getElementById('raiseSlider').value);
+  if (gameMode === 'client') {
+    // Cliente: el panel solo se muestra cuando es el turno correcto (via applyStateUpdate),
+    // asi que enviamos la accion directamente sin re-verificar actionIndex local
+    const raiseAmount = parseInt(document.getElementById('raiseSlider').value) || 0;
+    console.log(`[CLIENT] playerAction: ${action} raise=${raiseAmount} myPlayerId=${myPlayerId}`);
     sendOnlineAction(action, raiseAmount);
     hideActionPanel();
-    setMsg('Acción enviada, esperando...');
+    setMsg('Accion enviada, esperando...');
     return;
   }
 
-  // HOST or LOCAL: execute immediately
-  executeAction(p, action, parseInt(document.getElementById('raiseSlider').value));
+  // HOST / LOCAL: ejecutar directamente
+  const p = players[actionIndex];
+  if (!p) return;
+  const isMyTurn = gameMode === 'local' ? p.isHuman : (actionIndex === myPlayerId);
+  if (!isMyTurn) return;
+  executeAction(p, action, parseInt(document.getElementById('raiseSlider').value) || 0);
 }
 
 function executeAction(p, action, raiseAmount) {

@@ -1635,7 +1635,13 @@ function getSocket() {
   });
   socket.on('error', (msg) => {
     console.error('[Socket.IO] Error del servidor:', msg);
-    document.getElementById('waitingMsg').innerHTML = '<b>❌ ' + msg + '</b>';
+    // ✅ FIX: mostrar el error de forma prominente, no solo en waitingMsg
+    const waitEl = document.getElementById('waitingMsg');
+    if (waitEl) {
+      waitEl.style.display = 'block';
+      waitEl.innerHTML = '<b style="color:#ff6666">❌ ' + msg + '</b>';
+    }
+    alert('❌ ' + msg);
   });
 
   return socket;
@@ -1767,13 +1773,14 @@ let selectedMode = 'local';
 
   const params = new URLSearchParams(window.location.search);
   const qroom = params.get('room');
-  if (qroom && qroom.length === 6) code = qroom.toUpperCase();
+  // ✅ FIX: eliminada restricción estricta de 6 chars — acepta cualquier código válido
+  if (qroom && qroom.trim().length >= 4) code = qroom.trim().toUpperCase();
 
   if (!code) {
     const hash = window.location.hash;
     if (hash && hash.startsWith('#room=')) {
-      const hcode = hash.slice(6).toUpperCase();
-      if (hcode.length === 6) code = hcode;
+      const hcode = hash.slice(6).trim().toUpperCase();
+      if (hcode.length >= 4) code = hcode;
     }
   }
 
@@ -1944,7 +1951,14 @@ async function createOnlineRoom(name) {
     setOnlineStatus('connected', `Sala ${roomId} — ${players.length} jugador(es)`);
   });
 
-  sock.emit('createRoom', { roomId, name });
+  // ✅ FIX: esperar a que el socket esté conectado antes de emitir
+  // Si se emite antes de la conexión y hay un error, el evento se pierde
+  const doCreate = () => sock.emit('createRoom', { roomId, name });
+  if (sock.connected) {
+    doCreate();
+  } else {
+    sock.once('connect', doCreate);
+  }
 }
 
 async function joinOnlineRoom(name, code) {
@@ -1984,7 +1998,13 @@ async function joinOnlineRoom(name, code) {
     startClientGame({ players: serverPlayers });
   });
 
-  sock.emit('joinRoom', { roomId, name });
+  // ✅ FIX: esperar a que el socket esté conectado antes de emitir
+  const doJoin = () => sock.emit('joinRoom', { roomId, name });
+  if (sock.connected) {
+    doJoin();
+  } else {
+    sock.once('connect', doJoin);
+  }
 }
 
 async function startHostGame() {

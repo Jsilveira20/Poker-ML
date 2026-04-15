@@ -42,6 +42,11 @@ function getRoomOfSocket(socketId) {
   return null;
 }
 
+// ✅ FIX: Normaliza el roomId — elimina espacios y convierte a mayúsculas
+function normalizeRoomId(id) {
+  return (id || '').toString().trim().toUpperCase();
+}
+
 // ── Conexión ─────────────────────────────────────────────────────────────────
 io.on("connection", (socket) => {
   console.log("[+] Conectado:", socket.id);
@@ -49,6 +54,14 @@ io.on("connection", (socket) => {
   // ── CREAR SALA ────────────────────────────────────────────────────────────
   // Cliente emite: { roomId, name }
   socket.on("createRoom", ({ roomId, name }) => {
+    // ✅ FIX: Normalizar roomId antes de cualquier operación
+    roomId = normalizeRoomId(roomId);
+
+    if (!roomId || roomId.length < 4) {
+      socket.emit("error", "Código de sala inválido.");
+      return;
+    }
+
     if (rooms[roomId]) {
       socket.emit("error", "La sala ya existe. Probá con otro código.");
       return;
@@ -72,10 +85,15 @@ io.on("connection", (socket) => {
   // ── UNIRSE A SALA ─────────────────────────────────────────────────────────
   // Cliente emite: { roomId, name }
   socket.on("joinRoom", ({ roomId, name }) => {
+    // ✅ FIX: Normalizar roomId antes de cualquier operación
+    roomId = normalizeRoomId(roomId);
+
+    console.log(`[JOIN] Intento de unirse a sala: "${roomId}" | Salas activas: [${Object.keys(rooms).join(', ')}]`);
+
     const room = rooms[roomId];
     if (!room) {
-      console.warn(`[JOIN] ❌ Jugador intenta unirse a sala inexistente: ${roomId}`);
-      socket.emit("error", `No existe la sala ${roomId}.`);
+      console.warn(`[JOIN] ❌ Jugador intenta unirse a sala inexistente: "${roomId}"`);
+      socket.emit("error", `No existe la sala "${roomId}". Verificá el código e intentá de nuevo.`);
       return;
     }
     if (room.started) {
@@ -112,6 +130,7 @@ io.on("connection", (socket) => {
   // ── INICIAR PARTIDA (solo el host la envía) ───────────────────────────────
   // Cliente emite: { roomId }
   socket.on("startGame", ({ roomId }) => {
+    roomId = normalizeRoomId(roomId); // ✅ FIX: normalizar
     const room = rooms[roomId];
     if (!room) {
       console.warn(`[START] ❌ Intento de iniciar sala inexistente: ${roomId}`);
@@ -150,6 +169,7 @@ io.on("connection", (socket) => {
   // El host calcula el estado del juego y lo difunde a los clientes.
   // Cliente emite: { roomId, state }
   socket.on("gameState", ({ roomId, state }) => {
+    roomId = normalizeRoomId(roomId); // ✅ FIX: normalizar
     const room = rooms[roomId];
     if (!room) {
       console.warn(`[BROADCAST] ❌ Sala ${roomId} NO EXISTE`);
@@ -179,6 +199,7 @@ io.on("connection", (socket) => {
 
   // ── PEDIR ESTADO ACTUAL (cliente que reconecta) ───────────────────────────
   socket.on("requestState", ({ roomId }) => {
+    roomId = normalizeRoomId(roomId); // ✅ FIX: normalizar
     const room = rooms[roomId];
     if (!room) {
       console.warn(`[REQUEST] ❌ Cliente solicita estado de sala inexistente: ${roomId}`);
@@ -197,6 +218,7 @@ io.on("connection", (socket) => {
   // y el servidor la retransmite al host para que la procese.
   // Cliente emite: { roomId, playerId, action, raiseAmount }
   socket.on("playerAction", ({ roomId, playerId, action, raiseAmount }) => {
+    roomId = normalizeRoomId(roomId); // ✅ FIX: normalizar
     const room = rooms[roomId];
     if (!room || !room.started) return;
 
@@ -248,5 +270,3 @@ io.on("connection", (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
-
-

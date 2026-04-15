@@ -5,8 +5,19 @@ const { Server } = require("socket.io");
 const app    = express();
 const server = http.createServer(app);
 
-app.use(express.static(__dirname));
-app.get("/", (req, res) => res.sendFile(__dirname + "/index.html"));
+const path = require("path");
+
+app.use(express.static(path.join(__dirname)));
+
+app.get("/", (req, res) => {
+  const filePath = path.join(__dirname, "index.html");
+  res.sendFile(filePath, (err) => {
+    if (err) {
+      console.error("❌ Error enviando index.html:", err);
+      res.status(500).send("Error cargando la app");
+    }
+  });
+});
 
 const io = new Server(server, {
   cors: { origin: "*" },
@@ -237,3 +248,5 @@ io.on("connection", (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
+
+

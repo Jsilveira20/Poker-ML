@@ -21,20 +21,19 @@ app.get("/", (req, res) => {
 
 const io = new Server(server, {
   cors: { origin: "*" },
-  // Permite reconexiones rápidas sin perder la sala
   pingTimeout: 30000,
   pingInterval: 10000,
 });
 
 // ── Estructura de sala ──────────────────────────────────────────────────────
 // rooms[roomId] = {
-//   players:   [{ socketId, playerId, name }],   // orden = índice de asiento
+//   players:   [{ socketId, playerId, name, isBot }],
 //   started:   bool,
-//   gameState: object | null,                     // último estado del host
+//   gameState: object | null,
 // }
 const rooms = {};
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────────────
 function getRoomOfSocket(socketId) {
   for (const [roomId, room] of Object.entries(rooms)) {
     if (room.players.some(p => p.socketId === socketId)) return roomId;
@@ -42,26 +41,39 @@ function getRoomOfSocket(socketId) {
   return null;
 }
 
-// ✅ FIX: Normaliza el roomId — elimina espacios y convierte a mayúsculas
 function normalizeRoomId(id) {
   return (id || '').toString().trim().toUpperCase();
+}
+
+// ── BOT: entrada ficticia que representa al bot de ML en la sala ─────────────
+// El bot NO tiene socketId real — usa el centinela "BOT" para que el servidor
+// no intente enviarle eventos directamente.
+// isBot: true  →  el host lo maneja localmente; los clientes lo reciben
+//                 en playerList para poder renderizarlo en la mesa.
+const BOT_SOCKET_SENTINEL = "BOT";
+
+function createBotEntry(playerId) {
+  return {
+    socketId: BOT_SOCKET_SENTINEL,
+    playerId,
+    name: "ML Bot",
+    isBot: true,
+  };
 }
 
 // ── Conexión ─────────────────────────────────────────────────────────────────
 io.on("connection", (socket) => {
   console.log("[+] Conectado:", socket.id);
 
-  // ── CREAR SALA ────────────────────────────────────────────────────────────
+  // ── CREAR SALA ─────────────────────────────────────────────────────────────
   // Cliente emite: { roomId, name }
   socket.on("createRoom", ({ roomId, name }) => {
-    // ✅ FIX: Normalizar roomId antes de cualquier operación
     roomId = normalizeRoomId(roomId);
 
     if (!roomId || roomId.length < 4) {
       socket.emit("error", "Código de sala inválido.");
       return;
     }
-
     if (rooms[roomId]) {
       socket.emit("error", "La sala ya existe. Probá con otro código.");
       return;
@@ -69,174 +81,159 @@ io.on("connection", (socket) => {
 
     rooms[roomId] = { players: [], started: false, gameState: null };
 
-    const playerId = 0; // host siempre es el jugador 0
-    rooms[roomId].players.push({ socketId: socket.id, playerId, name });
+    // ── 1. Registrar al host (playerId 0) ──────────────────────────────────
+    const hostEntry = { socketId: socket.id, playerId: 0, name, isBot: false };
+    rooms[roomId].players.push(hostEntry);
     socket.join(roomId);
 
-    console.log(`[SALA] Creada: ${roomId} por ${name} (${socket.id})`);
+    // ── 2. Registrar al bot (playerId 1) — SIEMPRE, en todas las salas ─────
+    // FIX CRÍTICO: el bot se agrega aquí, al crear la sala, para que
+    // TODOS los jugadores que se unan reciban la misma lista con el bot.
+    const botEntry = createBotEntry(1);
+    rooms[roomId].players.push(botEntry);
 
-    // Confirmar al host su playerId y la lista de jugadores
+    console.log(`[SALA] Creada: ${roomId} por ${name} (${socket.id}) | Bot registrado como jugador 1`);
+
     socket.emit("roomJoined", {
-      playerId,
-      players: rooms[roomId].players.map(p => ({ id: p.playerId, name: p.name })),
+      playerId: 0,
+      players: rooms[roomId].players.map(p => ({ id: p.playerId, name: p.name, isBot: p.isBot })),
     });
   });
 
-  // ── UNIRSE A SALA ─────────────────────────────────────────────────────────
+  // ── UNIRSE A SALA ──────────────────────────────────────────────────────────
   // Cliente emite: { roomId, name }
   socket.on("joinRoom", ({ roomId, name }) => {
-    // ✅ FIX: Normalizar roomId antes de cualquier operación
     roomId = normalizeRoomId(roomId);
 
-    console.log(`[JOIN] Intento de unirse a sala: "${roomId}" | Salas activas: [${Object.keys(rooms).join(', ')}]`);
+    console.log(`[JOIN] Intento: "${roomId}" | Salas activas: [${Object.keys(rooms).join(', ')}]`);
 
     const room = rooms[roomId];
     if (!room) {
-      console.warn(`[JOIN] ❌ Jugador intenta unirse a sala inexistente: "${roomId}"`);
       socket.emit("error", `No existe la sala "${roomId}". Verificá el código e intentá de nuevo.`);
       return;
     }
     if (room.started) {
-      console.warn(`[JOIN] ❌ Jugador ${name} intenta unirse a ${roomId} pero partida ya comenzó`);
       socket.emit("error", "La partida ya comenzó.");
       return;
     }
-    if (room.players.length >= 6) {
-      console.warn(`[JOIN] ❌ Jugador ${name} intenta unirse a ${roomId} pero está llena (${room.players.length}/6)`);
-      socket.emit("error", "La sala está llena (máx. 6).");
+    // El límite real de HUMANOS es 6; el bot ya ocupa un asiento lógico pero
+    // no cuenta como "jugador en sala" a efectos del tope de conexiones.
+    const humanCount = room.players.filter(p => !p.isBot).length;
+    if (humanCount >= 6) {
+      socket.emit("error", "La sala está llena (máx. 6 humanos).");
       return;
     }
 
-    const playerId = room.players.length;
-    room.players.push({ socketId: socket.id, playerId, name });
+    // FIX: el nuevo jugador humano recibe el próximo id libre DESPUÉS del bot.
+    // Los ids ya asignados (incluido el bot) no se reutilizan.
+    const usedIds = room.players.map(p => p.playerId);
+    const playerId = Math.max(...usedIds) + 1;
+
+    room.players.push({ socketId: socket.id, playerId, name, isBot: false });
     socket.join(roomId);
 
-    console.log(`[JOIN] ✅ ${name} se unió a ${roomId} como jugador ${playerId} (total: ${room.players.length})`);
+    console.log(`[JOIN] ✅ ${name} → jugador ${playerId} en ${roomId} (total: ${room.players.length}, bot incluido)`);
 
-    // Confirmar al recién unido
+    // Confirmar al recién unido — incluye al bot en la lista
     socket.emit("roomJoined", {
       playerId,
-      players: room.players.map(p => ({ id: p.playerId, name: p.name })),
+      players: room.players.map(p => ({ id: p.playerId, name: p.name, isBot: p.isBot })),
     });
-    console.log(`[JOIN]   → Confirmado: jugador ${playerId} en sala ${roomId}`);
 
-    // Notificar a TODOS (incluido host) la lista actualizada
+    // Notificar a TODOS la lista actualizada (con bot)
     io.to(roomId).emit("playersUpdate", {
-      players: room.players.map(p => ({ id: p.playerId, name: p.name })),
+      players: room.players.map(p => ({ id: p.playerId, name: p.name, isBot: p.isBot })),
     });
-    console.log(`[JOIN]   → Notificando playersUpdate a ${room.players.length} clientes`);
+    console.log(`[JOIN]   → playersUpdate enviado a ${room.players.filter(p=>!p.isBot).length} clientes humanos`);
   });
 
-  // ── INICIAR PARTIDA (solo el host la envía) ───────────────────────────────
+  // ── INICIAR PARTIDA (solo el host) ─────────────────────────────────────────
   // Cliente emite: { roomId }
   socket.on("startGame", ({ roomId }) => {
-    roomId = normalizeRoomId(roomId); // ✅ FIX: normalizar
+    roomId = normalizeRoomId(roomId);
     const room = rooms[roomId];
     if (!room) {
-      console.warn(`[START] ❌ Intento de iniciar sala inexistente: ${roomId}`);
       socket.emit("error", `Sala ${roomId} no existe`);
       return;
     }
 
     const sender = room.players.find(p => p.socketId === socket.id);
     if (!sender) {
-      console.warn(`[START] ❌ Socket ${socket.id} intenta iniciar pero NO está en sala ${roomId}`);
       socket.emit("error", "No estás en esa sala.");
       return;
     }
     if (sender.playerId !== 0) {
-      console.warn(`[START] ❌ Jugador ${sender.playerId} (no host) intenta iniciar partida en ${roomId}`);
       socket.emit("error", "Solo el host puede iniciar la partida.");
       return;
     }
 
     room.started = true;
-    console.log(`[START] ✅ Partida iniciada en ${roomId} con ${room.players.length} jugadores`);
-    const playerList = room.players.map(q => ({ id: q.playerId, name: q.name }));
-    console.log(`[START] 📢 Enviando 'gameStarted' a ${room.players.length} clientes (host + ${room.players.length - 1} jugadores)`);
 
-    // Avisar a TODOS — cada cliente recibe su propio myPlayerId
-    room.players.forEach(p => {
-      console.log(`[START]   → Enviando a jugador ${p.playerId} (socket: ${p.socketId.substring(0, 8)}...)`);
+    // FIX CRÍTICO: playerList incluye al bot (isBot: true).
+    // Cada cliente — host y no-host — recibe la MISMA lista completa,
+    // y cada uno puede identificar al bot por la propiedad isBot.
+    const playerList = room.players.map(p => ({
+      id:    p.playerId,
+      name:  p.name,
+      isBot: p.isBot,
+    }));
+
+    console.log(`[START] ✅ Partida iniciada en ${roomId} | jugadores: ${JSON.stringify(playerList)}`);
+
+    // Enviar solo a los humanos (el bot no tiene socket real)
+    const humanPlayers = room.players.filter(p => !p.isBot);
+    humanPlayers.forEach(p => {
       io.to(p.socketId).emit("gameStarted", {
-        players: playerList,
-        myPlayerId: p.playerId,  // cada uno recibe su propio índice
+        players: playerList,      // lista completa con bot
+        myPlayerId: p.playerId,   // id propio de cada cliente
       });
+      console.log(`[START]   → gameStarted a jugador ${p.playerId} (${p.name})`);
     });
   });
 
-  // ── BROADCAST ESTADO (solo el host lo envía) ──────────────────────────────
-  // El host calcula el estado del juego y lo difunde a los clientes.
+  // ── BROADCAST ESTADO (host → clientes) ────────────────────────────────────
   // Cliente emite: { roomId, state }
   socket.on("gameState", ({ roomId, state }) => {
-    roomId = normalizeRoomId(roomId); // ✅ FIX: normalizar
+    roomId = normalizeRoomId(roomId);
     const room = rooms[roomId];
-    if (!room) {
-      console.warn(`[BROADCAST] ❌ Sala ${roomId} NO EXISTE`);
-      return;
-    }
+    if (!room) return;
 
     const sender = room.players.find(p => p.socketId === socket.id);
-    if (!sender) {
-      console.warn(`[BROADCAST] ❌ Socket ${socket.id} no pertenece a sala ${roomId}`);
-      return;
-    }
-    if (sender.playerId !== 0) {
-      console.warn(`[BROADCAST] ❌ Socket intenta broadcast pero NO es host (es player ${sender.playerId})`);
-      return;
-    }
+    if (!sender || sender.playerId !== 0) return;
 
-    room.gameState = state; // guardar último estado (por si alguien reconecta)
-    
-    console.log(`[BROADCAST] 📡 HOST enviando gameState a sala ${roomId}`);
-    console.log(`  - fase: ${state.phase}, pot: $${state.pot}, actionIndex: ${state.actionIndex}`);
-    console.log(`  - jugadores en sala: ${room.players.length}`);
-    console.log(`  - reenviando a ${room.players.length - 1} clientes (excepto host)`);
+    room.gameState = state;
 
-    // Reenviar a todos los clientes EXCEPTO al host
+    console.log(`[BROADCAST] 📡 gameState → sala ${roomId} | fase: ${state.phase}, pot: $${state.pot}`);
+
+    // Reenviar a todos EXCEPTO al host (sin tocar la lógica del bot:
+    // el host ya lo maneja localmente)
     socket.to(roomId).emit("gameState", state);
   });
 
-  // ── PEDIR ESTADO ACTUAL (cliente que reconecta) ───────────────────────────
+  // ── PEDIR ESTADO ACTUAL (reconexión) ──────────────────────────────────────
   socket.on("requestState", ({ roomId }) => {
-    roomId = normalizeRoomId(roomId); // ✅ FIX: normalizar
+    roomId = normalizeRoomId(roomId);
     const room = rooms[roomId];
-    if (!room) {
-      console.warn(`[REQUEST] ❌ Cliente solicita estado de sala inexistente: ${roomId}`);
-      return;
-    }
-    if (!room.gameState) {
-      console.warn(`[REQUEST] ⚠️  Cliente solicita estado pero gameState aún es null en sala ${roomId}`);
-      return;
-    }
-    console.log(`[REQUEST] 📤 Enviando gameState guardado a cliente de sala ${roomId}`);
+    if (!room || !room.gameState) return;
     socket.emit("gameState", room.gameState);
   });
 
   // ── ACCIÓN DE JUGADOR (cliente → host) ────────────────────────────────────
-  // Cuando es el turno de un cliente, éste envía su acción al servidor
-  // y el servidor la retransmite al host para que la procese.
   // Cliente emite: { roomId, playerId, action, raiseAmount }
   socket.on("playerAction", ({ roomId, playerId, action, raiseAmount }) => {
-    roomId = normalizeRoomId(roomId); // ✅ FIX: normalizar
+    roomId = normalizeRoomId(roomId);
     const room = rooms[roomId];
     if (!room || !room.started) return;
 
     const sender = room.players.find(p => p.socketId === socket.id);
-    if (!sender) {
-      console.warn(`[ACCIÓN] Socket ${socket.id} no está en la sala ${roomId}`);
-      return;
-    }
-
-    // Verificar que el socket corresponde al playerId que dice ser
+    if (!sender) return;
     if (sender.playerId !== playerId) {
-      console.warn(`[ACCIÓN] Rechazada: ${socket.id} dice ser jugador ${playerId} pero es ${sender.playerId}`);
+      console.warn(`[ACCIÓN] Rechazada: socket dice ser jugador ${playerId} pero es ${sender.playerId}`);
       return;
     }
 
     console.log(`[ACCIÓN] Jugador ${playerId} en ${roomId}: ${action} ${raiseAmount ?? ''}`);
 
-    // Reenviar SOLO al host (jugador 0)
     const host = room.players.find(p => p.playerId === 0);
     if (host) {
       io.to(host.socketId).emit("playerAction", { playerId, action, raiseAmount, _ts: Date.now() });
@@ -252,17 +249,18 @@ io.on("connection", (socket) => {
     const room = rooms[roomId];
     const player = room.players.find(p => p.socketId === socket.id);
 
+    // Solo eliminar al jugador humano; el bot permanece en sala
     room.players = room.players.filter(p => p.socketId !== socket.id);
 
-    if (room.players.length === 0) {
+    const humanPlayersLeft = room.players.filter(p => !p.isBot);
+    if (humanPlayersLeft.length === 0) {
       delete rooms[roomId];
-      console.log(`[SALA] Sala ${roomId} eliminada (sin jugadores)`);
+      console.log(`[SALA] Sala ${roomId} eliminada (sin humanos)`);
     } else {
-      // Notificar al resto
       io.to(roomId).emit("playerLeft", {
         playerId: player?.playerId,
         name: player?.name,
-        players: room.players.map(p => ({ id: p.playerId, name: p.name })),
+        players: room.players.map(p => ({ id: p.playerId, name: p.name, isBot: p.isBot })),
       });
     }
   });

@@ -4220,10 +4220,12 @@ function simpleRank(cards) {
   const vals = cards.map(c=>c.value);
   const counts = {};
   vals.forEach(v => counts[v] = (counts[v]||0)+1);
-  const maxCount = Math.max(...Object.values(counts));
-  if(maxCount >= 4) return 7;
-  if(maxCount >= 3) return 3;
-  if(maxCount >= 2) return 1;
+  const freq = Object.values(counts).sort((a,b)=>b-a);
+  if(freq[0]>=4) return 7;
+  if(freq[0]>=3 && freq[1]>=2) return 6; // full house
+  if(freq[0]>=3) return 3;
+  if(freq[0]>=2 && freq[1]>=2) return 2; // two pair
+  if(freq[0]>=2) return 1;
   return 0;
 }
 function evaluate5(cards) {
@@ -4234,8 +4236,11 @@ function evaluate5(cards) {
   const freq = Object.values(counts).sort((a,b)=>b-a);
   const isFlush = suits.every(s=>s===suits[0]);
   const isStraight = checkStraight(vals);
+  // FIX: Royal Flush solo si el straight empieza en 10 (10-J-Q-K-A) con flush.
+  // Un A-2-3-4-5 flush NO es Royal Flush aunque vals[0]===14.
+  const isRoyal = isFlush && isStraight && vals[0]===14 && vals[1]===13;
   let rank = 0;
-  if(isFlush && isStraight && vals[0]===14) rank = 9;
+  if(isRoyal) rank = 9;
   else if(isFlush && isStraight) rank = 8;
   else if(freq[0]===4) rank = 7;
   else if(freq[0]===3 && freq[1]===2) rank = 6;
@@ -4244,7 +4249,8 @@ function evaluate5(cards) {
   else if(freq[0]===3) rank = 3;
   else if(freq[0]===2 && freq[1]===2) rank = 2;
   else if(freq[0]===2) rank = 1;
-  const grouped = Object.entries(counts).sort((a,b)=>b[1]-a[1]||b[0]-a[0]);
+  // FIX: ordenar por frecuencia DESC, luego por valor numérico DESC (era string, causaba 9 > 10).
+  const grouped = Object.entries(counts).sort((a,b)=>b[1]-a[1]||parseInt(b[0])-parseInt(a[0]));
   const kickers = grouped.flatMap(([v,c])=>Array(c).fill(parseInt(v)));
   return { rank, kickers, cards };
 }

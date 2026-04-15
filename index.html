@@ -1641,52 +1641,6 @@ function getSocket() {
   return socket;
 }
 
-// ── getSocketReady: espera a que el socket esté conectado antes de emitir ──
-// Resuelve la race condition donde el cliente emitía 'createRoom' o 'joinRoom'
-// antes de que el socket terminara de conectarse (especialmente en Render cold start).
-function getSocketReady() {
-  return new Promise((resolve, reject) => {
-    const sock = getSocket();
-
-    if (sock.connected) {
-      resolve(sock);
-      return;
-    }
-
-    const timeout = setTimeout(() => {
-      sock.off('connect', onConnect);
-      sock.off('connect_error', onError);
-      reject(new Error('Timeout conectando al servidor (30s)'));
-    }, 30_000);
-
-    function onConnect() {
-      clearTimeout(timeout);
-      sock.off('connect_error', onError);
-      resolve(sock);
-    }
-
-    function onError(err) {
-      clearTimeout(timeout);
-      sock.off('connect', onConnect);
-      reject(err);
-    }
-
-    sock.once('connect', onConnect);
-    sock.once('connect_error', onError);
-  });
-}
-
-// ── warmUpServer: hace un ping HTTP para despertar el servidor antes de conectar ──
-// En Render (plan gratuito) el servidor duerme tras 15min — esto lo despierta.
-async function warmUpServer() {
-  try {
-    const res = await fetch('/ping', { method: 'GET' });
-    if (res.ok) console.log('[WarmUp] Servidor activo ✅');
-  } catch (e) {
-    console.warn('[WarmUp] Servidor no responde aún, intentando igual...');
-  }
-}
-
 // ── Wrappers de compatibilidad (mantienen la API interna del juego) ──
 // El juego internamente usa fbSet/fbGet/fbListen/fbPatch para sincronizar
 // estado. Los reemplazamos para que en vez de usar P2P usen Socket.IO.
@@ -1963,27 +1917,16 @@ async function createOnlineRoom(name) {
   document.getElementById('waitingMsg').style.display = 'block';
   document.getElementById('waitingMsg').textContent = '⏳ Conectando al servidor...';
 
-  let sock;
-  try {
-    // FIX: esperar a que el socket esté conectado antes de emitir
-    sock = await getSocketReady();
-  } catch (err) {
-    document.getElementById('waitingMsg').textContent = '❌ No se pudo conectar. Verificá tu conexión e intentá de nuevo.';
-    setOnlineStatus('disconnected');
-    console.error('[createOnlineRoom] Error de conexión:', err);
-    return;
-  }
+  const sock = getSocket();
 
-  document.getElementById('waitingMsg').textContent = '⏳ Creando sala...';
-
-  // Escuchar confirmación ANTES de emitir
+  // Escuchar confirmación de sala creada
   sock.once('roomJoined', ({ playerId, players }) => {
     myPlayerId = playerId; // siempre 0 para el host
     const newUrl = window.location.origin + window.location.pathname + '?room=' + roomId;
     window.history.replaceState({}, '', newUrl);
     document.getElementById('roomCodeDisplay').textContent = roomId;
     document.getElementById('roomInfo').style.display = 'block';
-    document.getElementById('waitingMsg').textContent = '✅ Sala creada! Esperando jugadores...';
+    document.getElementById('waitingMsg').textContent = '⏳ Esperando jugadores...';
     document.getElementById('lobbyStartBtn').textContent = 'Iniciar Partida';
     document.getElementById('lobbyStartBtn').onclick = startHostGame;
     const linkEl = document.getElementById('roomLinkDisplay');
@@ -2001,7 +1944,6 @@ async function createOnlineRoom(name) {
     setOnlineStatus('connected', `Sala ${roomId} — ${players.length} jugador(es)`);
   });
 
-  // Ahora sí emitir — el socket está confirmado conectado
   sock.emit('createRoom', { roomId, name });
 }
 
@@ -2021,17 +1963,7 @@ async function joinOnlineRoom(name, code) {
   document.getElementById('waitingMsg').style.display = 'block';
   document.getElementById('waitingMsg').textContent = '⏳ Conectando a sala ' + roomId + '...';
 
-  let readySock;
-  try {
-    // FIX: esperar conexión antes de emitir joinRoom
-    readySock = await getSocketReady();
-  } catch (err) {
-    document.getElementById('waitingMsg').textContent = '❌ No se pudo conectar. Verificá tu conexión e intentá de nuevo.';
-    setOnlineStatus('disconnected');
-    return;
-  }
-
-  readySock.once('roomJoined', ({ playerId, players: serverPlayers }) => {
+  sock.once('roomJoined', ({ playerId, players: serverPlayers }) => {
     myPlayerId = playerId;
     console.log('[CLIENT] roomJoined — soy jugador', myPlayerId, '| gameMode:', gameMode);
     const newUrl = window.location.origin + window.location.pathname + '?room=' + roomId;
@@ -2045,14 +1977,14 @@ async function joinOnlineRoom(name, code) {
   });
 
   // .on en lugar de .once — si el evento llega antes del render no se pierde
-  readySock.on('gameStarted', ({ players: serverPlayers, myPlayerId: mid }) => {
-    if (gameMode !== 'client') return; // el host también recibe este evento, ignorar
+  sock.on('gameStarted', ({ players: serverPlayers, myPlayerId: mid }) => {
+    if (gameMode !== 'client') return; // el host tambien recibe este evento, ignorar
     myPlayerId = mid;
     console.log('[CLIENT] gameStarted — soy jugador', myPlayerId, '| total jugadores:', serverPlayers.length);
     startClientGame({ players: serverPlayers });
   });
 
-  readySock.emit('joinRoom', { roomId, name });
+  sock.emit('joinRoom', { roomId, name });
 }
 
 async function startHostGame() {
@@ -2280,6 +2212,12 @@ function applyStateUpdate(state) {
     if (state.winner !== undefined && state.winner !== null) {
       const w = players[state.winner];
       if (w) {
+        // FIX: limpiar siempre antes de escribir datos nuevos (evita mostrar ronda anterior)
+        document.getElementById('winnerHandsGrid').innerHTML = '';
+        document.getElementById('winnerHand').textContent = '';
+        document.getElementById('winnerName').textContent = '';
+        document.getElementById('winnerTitle').textContent = '';
+        document.getElementById('winnerPot').textContent = '';
         const isMyWin = state.winner === myPlayerId;
         document.getElementById('winnerTitle').textContent = isMyWin
           ? '\uD83C\uDFC6 \u00A1Ganaste!'
@@ -3311,7 +3249,7 @@ function runActionLoop() {
 
   const activePlayers = players.filter(p => !p.folded);
   if(activePlayers.length === 1) {
-    declareWinner(activePlayers[0]); return;
+    declareWinner(activePlayers[0], null, activePlayers); return;
   }
 
   if(roundOver()) {
@@ -3983,11 +3921,16 @@ function botAct(p) {
   if(action === 'raise' && p.chips === 0) action = 'call';
   if(action === 'raise' && raiseAmount <= p.bet) action = 'call';
 
-  // Show ML reasoning in msg if ML bot
+  // Show ML reasoning briefly in msg if ML bot — cleared after bot acts
   if(p.isML && decision._mlProb !== undefined) {
     const conf = (decision._mlProb * 100).toFixed(0);
     const tag = decision._bluff ? ' 🃏bluff' : decision._explore ? ' 🎲explora' : '';
-    setMsg(`🤖 Bot ML${tag}: ${action.toUpperCase()} | P(win): ${conf}%`);
+    const _mlMsgEl = document.getElementById('msgLabel');
+    if(_mlMsgEl) _mlMsgEl.textContent = `🤖 Bot ML${tag}: ${action.toUpperCase()} | P(win): ${conf}%`;
+    // Limpiar el P(win) después de mostrar la acción del bot
+    setTimeout(() => {
+      if(_mlMsgEl && _mlMsgEl.textContent.includes('P(win)')) _mlMsgEl.textContent = '';
+    }, 1200);
   }
 
   // Mostrar burbuja flotante de acción del bot
@@ -4020,7 +3963,7 @@ function showdown() {
 function judgeWinner() {
   const active = players.filter(p => !p.folded);
   if(active.length === 0) return;
-  if(active.length === 1) { declareWinner(active[0]); return; }
+  if(active.length === 1) { declareWinner(active[0], null, active); return; }
 
   let bestRank = -1, winner = null, winnerResult = null;
   active.forEach(p => {
@@ -4029,8 +3972,7 @@ function judgeWinner() {
       bestRank = result.rank; winner = p; winnerResult = result;
     }
   });
-  showAllHands(active, winner);
-  declareWinner(winner, winnerResult);
+  declareWinner(winner, winnerResult, active);
 }
 
 function showAllHands(active, winner) {
@@ -4076,10 +4018,22 @@ function showAllHands(active, winner) {
   });
 }
 
-function declareWinner(winner, handResult) {
+function declareWinner(winner, handResult, activePlayers) {
   const winnerIdx = players.indexOf(winner);
   const winnerHandName = handResult ? HAND_NAMES[handResult.rank] : 'Ganador por default';
   const winnerPotAmt = pot;
+
+  // Limpiar siempre el grid ANTES de mostrar nuevas manos
+  document.getElementById('winnerHandsGrid').innerHTML = '';
+  document.getElementById('winnerHand').textContent = '';
+  document.getElementById('winnerName').textContent = '';
+  document.getElementById('winnerTitle').textContent = '';
+  document.getElementById('winnerPot').textContent = '';
+
+  // Mostrar manos ahora, con el grid limpio — evita mostrar cartas de ronda anterior
+  if(activePlayers && activePlayers.length > 0) {
+    showAllHands(activePlayers, winner);
+  }
 
   winner.chips += pot;
   if(mlKnowledge.winRates[winner.name] === undefined) mlKnowledge.winRates[winner.name] = 0;
@@ -4550,6 +4504,12 @@ function addBot6() {
 // ============================================================
 function nextHand() {
   document.getElementById('winnerOverlay').style.display = 'none';
+  // FIX: limpiar datos del overlay para que no queden visibles si se reabre rápido
+  document.getElementById('winnerHandsGrid').innerHTML = '';
+  document.getElementById('winnerHand').textContent = '';
+  document.getElementById('winnerName').textContent = '';
+  document.getElementById('winnerTitle').textContent = '';
+  document.getElementById('winnerPot').textContent = '';
   if(gameMode === 'client') {
     // FIX #5: notificar al servidor que este cliente está listo para la siguiente mano.
     // El host arrancará cuando presione "Nueva Mano" — el cliente solo espera el broadcast.
@@ -5219,9 +5179,6 @@ if (_origInitAudio) {
   // Reemplazar la referencia global
   window.initAudio = _patchedInitAudio;
 }
-
-// Despertar el servidor al cargar (anti cold-start en Render)
-document.addEventListener('DOMContentLoaded', warmUpServer);
 
 initThree();
 // Don't init players yet — wait for lobby

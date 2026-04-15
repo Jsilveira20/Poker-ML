@@ -2116,32 +2116,52 @@ function buildGameStateSnapshot(winnerIdx, winnerHandName, winnerPotAmt) {
     winner: winnerIdx !== undefined ? winnerIdx : null,
     winnerHandName: winnerHandName || null,
     winnerPot: winnerPotAmt || pot,
+    // Última acción para que el cliente no-host muestre animaciones de burbuja
+    lastActionPlayer: _lastBroadcastAction ? _lastBroadcastAction.playerIdx : null,
+    lastActionType:   _lastBroadcastAction ? _lastBroadcastAction.action    : null,
+    lastActionDetail: _lastBroadcastAction ? _lastBroadcastAction.detail    : null,
+    lastActionSeqId:  _lastBroadcastAction ? _lastBroadcastAction.seqId     : null,
     players: players.map((p) => ({
       name: p.name, chips: p.chips, bet: p.bet, folded: p.folded,
-      hand: p.hand  // todas las cartas — el cliente filtra y usa solo las suyas
+      hand: p.hand
     }))
   };
 }
+
+// Tracker de última acción para broadcast — se setea en executeAction antes de broadcastGameState
+let _lastBroadcastAction = null;
+let _broadcastActionSeq  = 0;
 
 function applyStateUpdate(state) {
   if (!state) return;
 
   // FIX #1 MEJORADO: Si myPlayerId aún no se asignó, usar el índice del primer gameState
-  // Esto permite que clientes se sincronicen incluso si llega gameState antes de roomJoined
   if (myPlayerId === undefined || myPlayerId === null) {
     console.warn('[CLIENT] ⚠️ myPlayerId no inicializado aún, esperando roomJoined...');
-    // NO retornar, continuar procesando para preparar la UI
   }
 
-  // Actualizar estado del juego (sin duplicaciones)
+  const prevPhase         = phase;
+  const prevCommunityLen  = communityCards.length;
+  const prevHandStr       = players[myPlayerId] ? JSON.stringify(players[myPlayerId].hand) : '';
+
+  // Actualizar estado del juego
   phase        = state.phase;
   pot          = state.pot;
   currentBet   = state.currentBet;
-  communityCards = state.communityCards || [];
   actionIndex  = state.actionIndex;
   gameRunning  = state.gameRunning;
 
-  // Sincronizar datos de jugadores — crear slots si no existen (race condition)
+  // ── Mostrar animación de burbuja para la última acción del host ──────────
+  if (
+    state.lastActionPlayer !== null &&
+    state.lastActionPlayer !== undefined &&
+    state.lastActionSeqId  !== _clientLastActionSeqId
+  ) {
+    _clientLastActionSeqId = state.lastActionSeqId;
+    showPlayerActionBubble(state.lastActionPlayer, state.lastActionType, state.lastActionDetail || '');
+  }
+
+  // Sincronizar datos de jugadores
   (state.players || []).forEach((sp, i) => {
     if (!players[i]) {
       console.warn(`[CLIENT] Creando slot faltante players[${i}] desde gameState`);
@@ -2158,7 +2178,6 @@ function applyStateUpdate(state) {
     players[i].folded = sp.folded;
     players[i].name   = sp.name || players[i].name;
 
-    // FIX #2: SIEMPRE mostrar las cartas propias, no solo cuando es el turno
     if (i === myPlayerId) {
       players[i].hand = sp.hand || [];
     } else if (phase === 'showdown') {
@@ -2166,17 +2185,30 @@ function applyStateUpdate(state) {
     }
   });
 
-  // Actualizar UI — batch para evitar múltiples repaints
+  // ── Actualizar community cards SIN parpadeo ──────────────────────────────
+  // Solo reconstruir el DOM si cambiaron las cartas (nueva fase o cartas nuevas)
+  const newCommunityLen = (state.communityCards || []).length;
+  if (newCommunityLen !== prevCommunityLen || phase !== prevPhase) {
+    communityCards = state.communityCards || [];
+    updateCommunityCards();
+  } else {
+    communityCards = state.communityCards || [];
+  }
+
+  // ── Actualizar mano propia SIN parpadeo ──────────────────────────────────
+  const newHandStr = players[myPlayerId] ? JSON.stringify(players[myPlayerId].hand) : '';
+  if (newHandStr !== prevHandStr) {
+    showPlayerHand();
+  }
+
+  // Actualizar resto de UI
   updateUI();
-  updateCommunityCards();
   setPhaseLabel(PHASE_LABELS[phase] || phase);
   updateBankUI();
-  showPlayerHand();
   ensureExitBtnVisible();
 
   if (!gameRunning) {
     hideActionPanel();
-    // Mostrar overlay ganador si viene en el estado
     if (state.winner !== undefined && state.winner !== null) {
       const w = players[state.winner];
       if (w) {
@@ -2197,7 +2229,6 @@ function applyStateUpdate(state) {
     return;
   }
 
-  // Controlar panel de acciones segun turno
   if (state.actionIndex === myPlayerId) {
     showActionPanel();
   } else {
@@ -2207,6 +2238,9 @@ function applyStateUpdate(state) {
     setMsg(turno ? `Turno de ${turno.name}...` : '');
   }
 }
+
+// Tracker del cliente para no repetir burbujas ya mostradas
+let _clientLastActionSeqId = null;
 
 function sendOnlineAction(action, raiseAmount) {
   if (!roomId || !socket) {
@@ -3153,6 +3187,7 @@ function startHand() {
   phase = 'preflop';
   gameRunning = true;
   roundsPlayed++;
+  _lastBroadcastAction = null; // reset para no repetir burbujas de la mano anterior
 
   dealerIndex = (dealerIndex + 1) % players.length;
   players.forEach(p => { p.hand.push(dealCard()); p.hand.push(dealCard()); });
@@ -3380,6 +3415,17 @@ function executeAction(p, action, raiseAmount) {
     showPlayerActionBubble(idx, action, _bubbleDetail);
   }
 
+  // Capturar detail ANTES de que la lógica modifique chips/bet
+  let _broadcastDetail = '';
+  if (action === 'call' || (action === 'check' && currentBet > p.bet)) {
+    const _toCall = Math.min(currentBet - p.bet, p.chips);
+    if (_toCall > 0) _broadcastDetail = `$${_toCall}`;
+  } else if (action === 'raise') {
+    const _minR = Math.max(currentBet * 2, currentBet + 20, 20);
+    const _act  = Math.max(raiseAmount || _minR, _minR);
+    _broadcastDetail = `$${Math.min(_act, p.chips + p.bet)}`;
+  }
+
   if(action === 'fold') {
     p.folded = true;
     p._lastAction = 0;
@@ -3436,6 +3482,16 @@ function executeAction(p, action, raiseAmount) {
   // FIX #1: avanzar actionIndex ANTES del broadcast para que los clientes
   // reciban el estado con el turno correcto (el del próximo jugador).
   actionIndex = (idx+1) % players.length;
+
+  // Guardar la acción para que el cliente no-host pueda mostrar la burbuja animada
+  if (gameMode === 'host') {
+    _lastBroadcastAction = {
+      playerIdx: idx,
+      action:    action,
+      detail:    _broadcastDetail,
+      seqId:     ++_broadcastActionSeq
+    };
+  }
 
   if(gameMode === 'host') broadcastGameState();
 

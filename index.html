@@ -327,7 +327,17 @@ body.online-active #exitRoomBtn {
   transform: translateY(-2px);
 }
 
-/* ── Exit button repositioned when ML stats panel is visible ── */
+/* ── Exit Summary: responsive layout ── */
+@media (max-width: 680px) {
+  #exitSummaryModal > div {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+  #exitSummaryModal > div > div:last-child {
+    width: auto !important;
+  }
+}
+/* ── Exit Room Button repositioned when ML stats panel is visible ── */
 #exitRoomBtn.stats-visible {
   bottom: 14px;
   left: 14px;
@@ -352,6 +362,57 @@ body.online-active #exitRoomBtn {
   opacity: 0;
   pointer-events: none;
 }
+
+/* ── Bot Action Toast ── */
+@keyframes botActionIn {
+  from { opacity: 0; transform: translate(-50%, 18px) scale(0.88); }
+  to   { opacity: 1; transform: translate(-50%, 0)    scale(1); }
+}
+@keyframes botActionOut {
+  from { opacity: 1; transform: translate(-50%, 0)    scale(1); }
+  to   { opacity: 0; transform: translate(-50%, -12px) scale(0.92); }
+}
+#botActionToast {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 300;
+  pointer-events: none;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+#botActionToast .bat-name {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 12px;
+  color: rgba(255,255,255,0.55);
+  letter-spacing: 1px;
+  font-weight: 600;
+}
+#botActionToast .bat-action {
+  font-family: 'Playfair Display', serif;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  padding: 8px 30px;
+  border-radius: 14px;
+  text-shadow: 0 2px 10px rgba(0,0,0,0.6);
+  animation: botActionIn 0.25s cubic-bezier(.34,1.56,.64,1) forwards;
+}
+#botActionToast .bat-detail {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: rgba(255,255,255,0.7);
+}
+/* Color por acción */
+#botActionToast.bat-check .bat-action  { background: linear-gradient(135deg,#1a3818,#2d5a27); color:#aaffaa; border:1.5px solid #449944; box-shadow: 0 0 20px rgba(68,153,68,0.4); }
+#botActionToast.bat-call  .bat-action  { background: linear-gradient(135deg,#0a2a60,#1a4a8a); color:#aaccff; border:1.5px solid #2255aa; box-shadow: 0 0 20px rgba(34,85,170,0.4); }
+#botActionToast.bat-raise .bat-action  { background: linear-gradient(135deg,#5a4000,#9a7000); color:#ffe080; border:1.5px solid #cc9900; box-shadow: 0 0 24px rgba(204,153,0,0.5); }
+#botActionToast.bat-fold  .bat-action  { background: linear-gradient(135deg,#5a0000,#8b0000); color:#ffaaaa; border:1.5px solid #aa2222; box-shadow: 0 0 16px rgba(170,34,34,0.3); }
 
 /* ── ML Level Progress Bar ── */
 #mlLevelBar {
@@ -437,6 +498,99 @@ body.online-active #exitRoomBtn {
 .wh-handname { font-size: 10px; color: #777; margin-left: 4px; font-style: italic; white-space: nowrap; }
 .wh-row.is-winner .wh-handname { color: #ffc040; font-weight: 700; }
 
+/* ── Bot Info Icon Button (lobby only, top-right) ── */
+#botInfoBtn {
+  position: fixed; top: 14px; right: 14px;
+  width: 42px; height: 42px;
+  background: linear-gradient(160deg, rgba(0,10,35,0.97), rgba(0,20,60,0.97));
+  border: 1px solid #2a6aaa;
+  box-shadow: 0 0 18px rgba(74,158,255,0.25);
+  border-radius: 50%;
+  z-index: 350; pointer-events: all; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px;
+  animation: mlGlow 5s ease-in-out infinite;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+#botInfoBtn:hover {
+  transform: scale(1.12);
+  box-shadow: 0 0 28px rgba(74,158,255,0.5);
+}
+
+/* ── Bot Info Modal ── */
+#botInfoModal {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(0,0,0,0.72);
+  display: none; align-items: center; justify-content: center;
+  z-index: 400; pointer-events: all;
+}
+#botInfoModal.open { display: flex; }
+#botInfoBox {
+  position: relative;
+  background: linear-gradient(160deg, rgba(0,12,38,0.99), rgba(0,22,65,0.99));
+  border: 1px solid #2a6aaa;
+  box-shadow: 0 0 40px rgba(74,158,255,0.22), inset 0 1px 0 rgba(100,180,255,0.08);
+  border-radius: 18px; padding: 26px 28px 22px;
+  max-width: 400px; width: 92%;
+  font-family: 'Rajdhani', sans-serif;
+  animation: mlGlow 5s ease-in-out infinite;
+}
+#botInfoClose {
+  position: absolute; top: 12px; right: 14px;
+  background: none; border: none; cursor: pointer;
+  font-size: 20px; color: #4a9eff; line-height: 1;
+  padding: 2px 6px; border-radius: 6px;
+  transition: background 0.12s, color 0.12s;
+}
+#botInfoClose:hover { background: rgba(74,158,255,0.15); color: #aad4ff; }
+#botInfoBox .bip-title {
+  font-size: 16px; font-weight: 700; color: #ffe066;
+  letter-spacing: 1px; margin-bottom: 14px;
+  display: flex; align-items: center; gap: 8px;
+}
+#botInfoBox .bip-section { margin-bottom: 10px; }
+#botInfoBox .bip-label {
+  font-size: 10px; color: #4a9eff; font-weight: 700;
+  letter-spacing: 1.4px; text-transform: uppercase; margin-bottom: 3px;
+}
+#botInfoBox .bip-text {
+  font-size: 12px; color: #b0ccee; line-height: 1.55;
+}
+#botInfoBox .bip-bar-wrap {
+  height: 6px; background: rgba(74,158,255,0.12);
+  border-radius: 3px; overflow: hidden; margin-top: 5px;
+}
+#botInfoBox .bip-bar-fill {
+  height: 100%; border-radius: 3px;
+  background: linear-gradient(90deg, #1a4aaa, #4a9eff);
+  width: 20%; transition: width 0.6s ease;
+}
+#botInfoBox .bip-phases {
+  display: flex; gap: 5px; margin-top: 5px; flex-wrap: wrap;
+}
+#botInfoBox .bip-phase {
+  font-size: 10px; padding: 3px 9px; border-radius: 5px;
+  border: 1px solid rgba(74,158,255,0.35); color: #6aaaee;
+  background: rgba(74,158,255,0.09); letter-spacing: 0.3px;
+}
+#botInfoBox .bip-divider {
+  height: 1px; background: rgba(74,158,255,0.18); margin: 9px 0;
+}
+#botInfoBox .bip-split {
+  display: flex; gap: 10px; margin-top: 4px;
+}
+#botInfoBox .bip-split-item {
+  flex: 1; background: rgba(74,158,255,0.06);
+  border: 1px solid rgba(74,158,255,0.2); border-radius: 8px;
+  padding: 6px 8px; text-align: center;
+}
+#botInfoBox .bip-split-pct {
+  font-size: 16px; font-weight: 700; display: block;
+}
+#botInfoBox .bip-split-name {
+  font-size: 9px; color: #6aaaee; letter-spacing: 0.5px;
+}
+
 /* ── Lobby ── */
 #lobbyOverlay {
   position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -502,17 +656,91 @@ body.online-active #exitRoomBtn {
 /* ── Player labels ── */
 .player-label {
   position: fixed; pointer-events: none; z-index: 90; white-space: nowrap;
-  background: rgba(0,0,0,0.82); border: 1px solid #555; border-radius: 8px;
-  padding: 4px 10px; font-family: 'Rajdhani', sans-serif; font-size: 12px;
-  color: #fff;
+  background: rgba(4,2,0,0.88);
+  border: 1px solid rgba(100,80,20,0.6);
+  border-radius: 7px;
+  padding: 3px 8px;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 11px;
+  color: #ddd;
   transition: border-color 0.15s, box-shadow 0.15s;
+  line-height: 1.35;
 }
 .player-label.active-turn {
   border-color: var(--gold);
-  box-shadow: 0 0 12px rgba(212,160,23,0.7);
+  box-shadow: 0 0 10px rgba(212,160,23,0.6);
   animation: neonPulse 1s ease-in-out infinite;
 }
-.player-label.folded { color: #444; border-color: #333; }
+.player-label.folded { color: #3a3530; border-color: #2a2520; }
+
+/* ── Action Bubble: flotante sobre el jugador ── */
+@keyframes actionBubbleIn {
+  from { opacity: 0; transform: translate(-50%, 10px) scale(0.82); }
+  to   { opacity: 1; transform: translate(-50%, 0)   scale(1); }
+}
+@keyframes actionBubbleOut {
+  from { opacity: 1; transform: translate(-50%, 0)    scale(1); }
+  to   { opacity: 0; transform: translate(-50%, -10px) scale(0.9); }
+}
+.action-bubble {
+  position: fixed;
+  pointer-events: none;
+  z-index: 120;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  animation: actionBubbleIn 0.22s cubic-bezier(.34,1.56,.64,1) forwards;
+}
+.action-bubble .ab-label {
+  font-family: 'Rajdhani', sans-serif;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 1.5px;
+  padding: 4px 12px;
+  border-radius: 8px;
+  white-space: nowrap;
+  text-transform: uppercase;
+  line-height: 1.2;
+}
+.action-bubble .ab-detail {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.65);
+  letter-spacing: 0.3px;
+  line-height: 1;
+}
+.action-bubble.ab-fold .ab-label {
+  background: linear-gradient(135deg, #5a0000, #8b0000);
+  color: #ffb3b3;
+  border: 1.5px solid #aa2222;
+  box-shadow: 0 0 12px rgba(170,34,34,0.4);
+}
+.action-bubble.ab-check .ab-label {
+  background: linear-gradient(135deg, #1a3818, #2d5a27);
+  color: #aaffaa;
+  border: 1.5px solid #449944;
+  box-shadow: 0 0 12px rgba(68,153,68,0.35);
+}
+.action-bubble.ab-call .ab-label {
+  background: linear-gradient(135deg, #0a2a60, #1a4a8a);
+  color: #aaccff;
+  border: 1.5px solid #2255aa;
+  box-shadow: 0 0 12px rgba(34,85,170,0.35);
+}
+.action-bubble.ab-raise .ab-label {
+  background: linear-gradient(135deg, #5a4000, #9a7000);
+  color: #ffe080;
+  border: 1.5px solid #cc9900;
+  box-shadow: 0 0 16px rgba(204,153,0,0.5);
+}
+.action-bubble.ab-hiding {
+  animation: actionBubbleOut 0.25s ease-in forwards;
+}
+/* Ocultar el toast global viejo */
+#botActionToast { display: none !important; }
 
 /* ══════════════════════════════════════════════════════════════
    MOBILE RESPONSIVE — pantallas ≤ 600px (portrait phones)
@@ -710,6 +938,12 @@ body.online-active #exitRoomBtn {
 
 
 <canvas id="gameCanvas"></canvas>
+<!-- Bot action toast -->
+<div id="botActionToast">
+  <div class="bat-name" id="batName"></div>
+  <div class="bat-action" id="batAction"></div>
+  <div class="bat-detail" id="batDetail"></div>
+</div>
 <div id="ui">
   <div id="bankUI">Banco: <span id="bankAmount">20000</span> | Fichas: <span id="chipsAmount">1000</span></div>
   <!-- Audio Control — debajo del banco -->
@@ -811,6 +1045,78 @@ body.online-active #exitRoomBtn {
 
 <!-- LOBBY SCREEN -->
 <div id="lobbyOverlay">
+
+  <!-- Bot Info Icon Button — esquina superior derecha, solo en lobby -->
+  <button id="botInfoBtn" title="¿Cómo funciona el Bot ML?" onclick="document.getElementById('botInfoModal').classList.add('open')">🤖</button>
+
+  <!-- Bot Info Modal -->
+  <div id="botInfoModal">
+    <div id="botInfoBox">
+      <button id="botInfoClose" onclick="document.getElementById('botInfoModal').classList.remove('open')" title="Cerrar">✕</button>
+      <div class="bip-title">🤖 Cómo funciona el Bot ML</div>
+
+      <div class="bip-section">
+        <div class="bip-label">¿Qué es?</div>
+        <div class="bip-text">Un agente de poker que <b style="color:#aad4ff">aprende en tiempo real</b> de cada mano jugada. Usa <b style="color:#aad4ff">regresión logística</b> para predecir la mejor acción según el contexto de la partida.</div>
+      </div>
+
+      <div class="bip-divider"></div>
+
+      <div class="bip-section">
+        <div class="bip-label">Variables que analiza</div>
+        <div class="bip-text">
+          <b style="color:#ffe066">Fuerza de mano</b> — qué tan buenas son sus cartas<br>
+          <b style="color:#ffe066">Pot odds</b> — relación riesgo/recompensa del pozo<br>
+          <b style="color:#ffe066">Fase del juego</b> — preflop, flop, turn o river<br>
+          <b style="color:#ffe066">Tu estilo</b> — frecuencia de raise y fold del humano
+        </div>
+      </div>
+
+      <div class="bip-divider"></div>
+
+      <div class="bip-section">
+        <div class="bip-label">Ciclo de aprendizaje</div>
+        <div class="bip-phases">
+          <span class="bip-phase">🎲 Heurística</span>
+          <span class="bip-phase">📊 Recolección</span>
+          <span class="bip-phase">🧠 Entrenamiento</span>
+          <span class="bip-phase">⚡ ML experto</span>
+        </div>
+        <div class="bip-text" style="margin-top:6px;">Arranca con reglas básicas de poker. A partir de ~20 muestras reales activa el modelo de ML y <b style="color:#aad4ff">reajusta los pesos cada 3 rondas</b>. También explora acciones aleatorias al principio para diversificar el dataset (exploración decreciente).</div>
+      </div>
+
+      <div class="bip-divider"></div>
+
+      <div class="bip-section">
+        <div class="bip-label">Split de datos</div>
+        <div class="bip-split">
+          <div class="bip-split-item">
+            <span class="bip-split-pct" style="color:#44ff88">70%</span>
+            <span class="bip-split-name">TRAIN</span>
+          </div>
+          <div class="bip-split-item">
+            <span class="bip-split-pct" style="color:#ffe066">15%</span>
+            <span class="bip-split-name">VAL</span>
+          </div>
+          <div class="bip-split-item">
+            <span class="bip-split-pct" style="color:#ff8844">15%</span>
+            <span class="bip-split-name">TEST</span>
+          </div>
+        </div>
+        <div class="bip-text" style="margin-top:6px;">Validación detecta overfitting; test mide rendimiento real sin sesgo.</div>
+      </div>
+
+      <div class="bip-divider"></div>
+
+      <div class="bip-section">
+        <div class="bip-label">Progreso actual</div>
+        <div class="bip-text">Nivel <b id="bipLevelVal" style="color:#ffe066">0</b> &nbsp;·&nbsp; <b id="bipRoundsVal" style="color:#aad4ff">0</b> rondas jugadas</div>
+        <div class="bip-bar-wrap"><div class="bip-bar-fill" id="bipBarFill"></div></div>
+        <div class="bip-text" style="margin-top:4px;font-size:10px;color:#6aaaee;" id="bipLevelLabel">Novato — aprendiendo básicos</div>
+      </div>
+    </div>
+  </div>
+
   <div id="lobbyBox">
     <h1>🃏 Texas Hold'em ML</h1>
     <p class="subtitle">POKER CON INTELIGENCIA ARTIFICIAL ADAPTATIVA</p>
@@ -1546,7 +1852,7 @@ function lobbyStart() {
 
 function startLocalGame(name) {
   gameMode = 'local';
-  document.getElementById('lobbyOverlay').style.display = 'none';
+  document.getElementById('lobbyOverlay').style.display = 'none'; document.getElementById('botInfoBtn').style.display = 'none'; document.getElementById('botInfoModal').classList.remove('open');
   roundsPlayed = 0; // reset session rounds
   initPlayers(name);
   buildPlayers();
@@ -1558,7 +1864,7 @@ function startLocalGame(name) {
 
 function startLocalMultiGame(name, extraNames) {
   gameMode = 'local';
-  document.getElementById('lobbyOverlay').style.display = 'none';
+  document.getElementById('lobbyOverlay').style.display = 'none'; document.getElementById('botInfoBtn').style.display = 'none'; document.getElementById('botInfoModal').classList.remove('open');
   roundsPlayed = 0;
   initPlayersMulti([name, ...extraNames]);
   buildPlayers();
@@ -1677,7 +1983,7 @@ async function startHostGame() {
   sock.once('gameStarted', ({ players: serverPlayers, myPlayerId: mid }) => {
     myPlayerId = mid !== undefined ? mid : 0;
     const humanNames = serverPlayers.map(p => p.name);
-    document.getElementById('lobbyOverlay').style.display = 'none';
+    document.getElementById('lobbyOverlay').style.display = 'none'; document.getElementById('botInfoBtn').style.display = 'none'; document.getElementById('botInfoModal').classList.remove('open');
     setOnlineStatus('connected', `Sala: ${roomId} | ${serverPlayers.length} jugadores`);
     initPlayersOnline(humanNames, myPlayerId);
     buildPlayers();
@@ -1696,7 +2002,7 @@ function startClientGame(roomState) {
   // Asegurarse que gameMode es 'client' aunque se llame desde un contexto inesperado
   gameMode = 'client';
 
-  document.getElementById('lobbyOverlay').style.display = 'none';
+  document.getElementById('lobbyOverlay').style.display = 'none'; document.getElementById('botInfoBtn').style.display = 'none'; document.getElementById('botInfoModal').classList.remove('open');
   setOnlineStatus('connected', `Sala: ${roomId} | Jugador ${myPlayerId + 1}`);
 
   const allPlayers = roomState.players
@@ -2529,6 +2835,7 @@ function updatePlayerLabels() {
       label.style.top  = (sy - 22)+'px';
     }
   });
+  updateActionBubbles();
 }
 
 // ⚡ OPTIMIZACIÓN ANIMATE LOOP
@@ -2928,7 +3235,7 @@ function runActionLoop() {
     hideActionPanel();
     ensureExitBtnVisible();
     setMsg(`${p.name} está pensando...`);
-    setTimeout(() => { botAct(p); }, 350 + Math.random()*350);
+    setTimeout(() => { botAct(p); }, 600 + Math.random()*500);
 
   } else if(isOtherHuman || isBot) {
     // Client side: another player's turn — just wait for host broadcast
@@ -3007,7 +3314,7 @@ function nextPhase() {
   startNewBettingRound();
 
   if(gameMode === 'host') broadcastGameState();
-  setTimeout(runActionLoop, 350); // ⚡ era 700ms
+  setTimeout(runActionLoop, 600); // ⚡ era 350ms
 }
 
 function firstActiveAfter(idx) {
@@ -3046,6 +3353,18 @@ function playerAction(action) {
 
 function executeAction(p, action, raiseAmount) {
   const idx = players.indexOf(p);
+
+  // Mostrar burbuja flotante para TODOS los jugadores (humano incluido)
+  if (idx !== -1) {
+    let _bubbleDetail = '';
+    if (action === 'call') {
+      const _toCall = Math.min(currentBet - p.bet, p.chips);
+      if (_toCall > 0) _bubbleDetail = `$${_toCall}`;
+    } else if (action === 'raise') {
+      _bubbleDetail = `$${Math.min(raiseAmount || (currentBet * 2), p.chips + p.bet)}`;
+    }
+    showPlayerActionBubble(idx, action, _bubbleDetail);
+  }
 
   if(action === 'fold') {
     p.folded = true;
@@ -3106,7 +3425,7 @@ function executeAction(p, action, raiseAmount) {
 
   if(gameMode === 'host') broadcastGameState();
 
-  setTimeout(runActionLoop, 200); // ⚡ era 400ms → más responsivo
+  setTimeout(runActionLoop, 500); // ⚡ era 200ms → más legible para el jugador
 }
 
 function recordBotAction(p, action) {
@@ -3478,6 +3797,45 @@ function evaluateHandStrength(hand, community) {
   return Math.min(base, 0.98);
 }
 
+function showBotActionToast(playerName, action, detail) {
+  const toast   = document.getElementById('botActionToast');
+  const nameEl  = document.getElementById('batName');
+  const actionEl = document.getElementById('batAction');
+  const detailEl = document.getElementById('batDetail');
+  if (!toast) return;
+
+  // Cancelar cualquier hide pendiente
+  if (toast._hideTimer) clearTimeout(toast._hideTimer);
+  if (toast._outTimer)  clearTimeout(toast._outTimer);
+
+  // Limpiar clases de color previas
+  toast.className = '';
+
+  const labels = { fold: 'FOLD', check: 'CHECK', call: 'CALL', raise: 'RAISE' };
+  const label = labels[action] || action.toUpperCase();
+
+  nameEl.textContent   = playerName;
+  actionEl.textContent = label;
+  detailEl.textContent = detail || '';
+  toast.classList.add('bat-' + action);
+
+  // Reset animation
+  actionEl.style.animation = 'none';
+  void actionEl.offsetWidth; // reflow
+  actionEl.style.animation = '';
+
+  toast.style.display = 'flex';
+
+  // Ocultar después de 1.4s con fade out
+  toast._hideTimer = setTimeout(() => {
+    actionEl.style.animation = 'botActionOut 0.3s ease-in forwards';
+    toast._outTimer = setTimeout(() => {
+      toast.style.display = 'none';
+      toast.className = '';
+    }, 300);
+  }, 1400);
+}
+
 function botAct(p) {
   const decision = decideAction(p);
   let action = decision.action;
@@ -3486,12 +3844,25 @@ function botAct(p) {
   if(action === 'check' && currentBet > p.bet) action = 'call';
   if(action === 'raise' && p.chips === 0) action = 'call';
   if(action === 'raise' && raiseAmount <= p.bet) action = 'call';
+
   // Show ML reasoning in msg if ML bot
   if(p.isML && decision._mlProb !== undefined) {
     const conf = (decision._mlProb * 100).toFixed(0);
     const tag = decision._bluff ? ' 🃏bluff' : decision._explore ? ' 🎲explora' : '';
     setMsg(`🤖 Bot ML${tag}: ${action.toUpperCase()} | P(win): ${conf}%`);
   }
+
+  // Mostrar burbuja flotante de acción del bot
+  let toastDetail = '';
+  if (action === 'call') {
+    const toCall = Math.min(currentBet - p.bet, p.chips);
+    toastDetail = toCall > 0 ? `$${toCall}` : '';
+  } else if (action === 'raise') {
+    toastDetail = `$${Math.min(raiseAmount, p.chips + p.bet)}`;
+  }
+  const _botPIdx = players.indexOf(p);
+  showPlayerActionBubble(_botPIdx, action, toastDetail);
+
   executeAction(p, action, raiseAmount);
 }
 
@@ -3708,6 +4079,19 @@ function updateMLBar() {
     else                        levelLabelEl.textContent = '🔵 Experto — ML dominante';
   }
 
+  // ── Sync Bot Info Panel (lobby only) ────────────────────────
+  const bipLevel = document.getElementById('bipLevelVal');
+  const bipRounds = document.getElementById('bipRoundsVal');
+  const bipBar = document.getElementById('bipBarFill');
+  const bipLabel = document.getElementById('bipLevelLabel');
+  if(bipLevel) bipLevel.textContent = mlLevel;
+  if(bipRounds) bipRounds.textContent = roundsPlayed;
+  if(bipBar) {
+    bipBar.style.width = levelProgress + '%';
+    bipBar.style.background = barFill ? barFill.style.background : '';
+  }
+  if(bipLabel && levelLabelEl) bipLabel.textContent = levelLabelEl.textContent;
+
   // ML Bot info if present
   if(mlBot) {
     const s = mlKnowledge.botStats[mlBot.name];
@@ -3805,7 +4189,13 @@ function setPhaseLabel(t) {
   document.getElementById('phaseLabel').textContent = t;
   document.getElementById('actionPhaseTag').textContent = t;
 }
-function setMsg(m) { document.getElementById('msgLabel').textContent = m; }
+function setMsg(m) {
+  // Mensajes de acciones individuales ya se muestran como burbujas flotantes
+  // Solo pasar al msgLabel mensajes que NO sean de acción individual
+  const isActionMsg = /hace Fold|hace Check|llama \$|sube a \$/.test(m);
+  const el = document.getElementById('msgLabel');
+  if (el && !isActionMsg) el.textContent = m;
+}
 function updateUI() {
   document.getElementById('potLabel').textContent = `Pozo: $${pot}`;
   updatePlayerLabels();
@@ -4077,6 +4467,31 @@ function exitRoom() {
     console.log(`[EXIT] Stack devuelto: +$${stackFinal} | Banco final: $${globalBank}`);
   }
 
+  // ── SNAPSHOT del Bot ML ANTES de resetear players[] ──────────────
+  // CRÍTICO: players[] se resetea más abajo. Si lo hacemos en showExitSummary
+  // ya es tarde — players.find(p => p.isML) devuelve undefined siempre.
+  const mlBotPlayer = players.find(p => p.isML);
+  if (mlBotPlayer) {
+    const stats = mlKnowledge.botStats[mlBotPlayer.name] || {};
+    window._mlBotSessionSnap = {
+      name:           mlBotPlayer.name,
+      hands:          stats.hands          || 0,
+      wins:           stats.wins           || 0,
+      folds:          stats.folds          || 0,
+      calls:          stats.calls          || 0,
+      raises:         stats.raises         || 0,
+      totalWon:       stats.totalWon       || 0,
+      totalLost:      stats.totalLost      || 0,
+      aggressiveness: stats.aggressiveness != null ? stats.aggressiveness : 0.5,
+      samples:        mlDataset.all.length,
+      roundsWithBot:  mlDataset.roundsWithBot || 0
+    };
+    console.log(`[EXIT] Snapshot Bot ML guardado: ${mlBotPlayer.name} | manos:${stats.hands} WR:${stats.hands > 0 ? ((stats.wins/stats.hands)*100).toFixed(0) : 0}%`);
+  } else {
+    window._mlBotSessionSnap = null;
+    console.log('[EXIT] No había Bot ML en esta partida.');
+  }
+
   // Desconectar del socket si estamos en modo online
   if((gameMode === 'host' || gameMode === 'client') && socket) {
     socket.off('gameState');
@@ -4110,24 +4525,108 @@ function exitRoom() {
   // Resetear estado de partida (sin tocar globalBank)
   deck = []; communityCards = []; pot = 0; currentBet = 0;
   players = []; phase = 'waiting'; actionIndex = 0;
-  document.getElementById('lobbyOverlay').style.display = 'flex';
+  document.getElementById('lobbyOverlay').style.display = 'flex'; document.getElementById('botInfoBtn').style.display = 'flex';
   showExitSummary(humanPlayer, stackFinal);
+}
+
+function buildMLBotSummaryHTML() {
+  // Recopilar datos del bot ML de mlKnowledge (snapshots tomados durante la sesión)
+  const mlBot = window._mlBotSessionSnap || null;
+  const hasBotML = !!mlBot;
+
+  if (!hasBotML) {
+    return `
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;min-height:180px;gap:10px;">
+        <div style="font-size:28px;opacity:0.3">🤖</div>
+        <div style="color:#444;font-size:12px;text-align:center;letter-spacing:0.5px;line-height:1.6;">
+          El Bot ML<br>no ingresó<br>a esta sesión
+        </div>
+      </div>`;
+  }
+
+  const { name, hands, wins, folds, calls, raises, totalWon, totalLost, aggressiveness, samples, roundsWithBot } = mlBot;
+  const winRate   = hands > 0 ? ((wins / hands) * 100).toFixed(0) : '—';
+  const aggPct    = Math.round(aggressiveness * 100);
+  const aggColor  = aggressiveness > 0.65 ? '#ff8844' : aggressiveness > 0.40 ? '#ffcc44' : '#44bbff';
+  const aggLabel  = aggressiveness > 0.65 ? 'Agresivo' : aggressiveness > 0.40 ? 'Balanceado' : 'Conservador';
+  const netML     = totalWon - totalLost;
+  const netColor  = netML > 0 ? '#44ff88' : netML < 0 ? '#ff6666' : '#888';
+  const netStr    = netML > 0 ? `+$${netML}` : netML < 0 ? `-$${Math.abs(netML)}` : '$0';
+  const phaseTag  = samples < 20
+    ? `<span style="color:#ffaa44;font-size:9px;">🌱 Fase heurística</span>`
+    : `<span style="color:#44ff88;font-size:9px;">🧠 ML activo</span>`;
+
+  const totalActions = folds + calls + raises;
+  const foldPct  = totalActions > 0 ? Math.round((folds  / totalActions) * 100) : 0;
+  const callPct  = totalActions > 0 ? Math.round((calls  / totalActions) * 100) : 0;
+  const raisePct = totalActions > 0 ? Math.round((raises / totalActions) * 100) : 0;
+
+  return `
+    <div style="font-size:13px;font-weight:700;color:#ffe066;letter-spacing:1px;margin-bottom:10px;display:flex;align-items:center;gap:6px;">
+      🧠 <span>${name}</span>
+    </div>
+    <div style="margin-bottom:8px;">${phaseTag}</div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;">
+      <div style="background:rgba(74,158,255,0.07);border:1px solid rgba(74,158,255,0.2);border-radius:8px;padding:8px 6px;text-align:center;">
+        <div style="color:#4a9eff;font-size:8px;letter-spacing:1px;margin-bottom:3px;">MANOS</div>
+        <div style="color:#aad4ff;font-size:18px;font-weight:700;">${hands}</div>
+      </div>
+      <div style="background:rgba(68,255,136,0.07);border:1px solid rgba(68,255,136,0.2);border-radius:8px;padding:8px 6px;text-align:center;">
+        <div style="color:#44ff88;font-size:8px;letter-spacing:1px;margin-bottom:3px;">WIN RATE</div>
+        <div style="color:#aaffcc;font-size:18px;font-weight:700;">${winRate}%</div>
+      </div>
+      <div style="background:rgba(${netML>0?'68,255,136':netML<0?'255,80,80':'100,100,100'},0.07);border:1px solid rgba(${netML>0?'68,255,136':netML<0?'255,80,80':'100,100,100'},0.2);border-radius:8px;padding:8px 6px;text-align:center;">
+        <div style="color:#888;font-size:8px;letter-spacing:1px;margin-bottom:3px;">NETO BOT</div>
+        <div style="color:${netColor};font-size:18px;font-weight:700;">${netStr}</div>
+      </div>
+      <div style="background:rgba(255,200,68,0.07);border:1px solid rgba(255,200,68,0.2);border-radius:8px;padding:8px 6px;text-align:center;">
+        <div style="color:#888;font-size:8px;letter-spacing:1px;margin-bottom:3px;">AGRESIVIDAD</div>
+        <div style="color:${aggColor};font-size:13px;font-weight:700;">${aggPct}% <span style="font-size:9px;">${aggLabel}</span></div>
+      </div>
+    </div>
+
+    <div style="background:rgba(74,158,255,0.05);border:1px solid rgba(74,158,255,0.15);border-radius:8px;padding:8px 10px;margin-bottom:8px;">
+      <div style="color:#4a9eff;font-size:8px;letter-spacing:1px;margin-bottom:6px;">DISTRIBUCIÓN DE ACCIONES</div>
+      <div style="display:flex;gap:4px;align-items:center;margin-bottom:3px;">
+        <div style="color:#ff8888;font-size:9px;min-width:36px;">FOLD</div>
+        <div style="flex:1;height:5px;background:rgba(255,255,255,0.05);border-radius:3px;overflow:hidden;">
+          <div style="width:${foldPct}%;height:100%;background:linear-gradient(90deg,#8b0000,#ff4444);border-radius:3px;"></div>
+        </div>
+        <div style="color:#ff8888;font-size:9px;min-width:24px;text-align:right;">${foldPct}%</div>
+      </div>
+      <div style="display:flex;gap:4px;align-items:center;margin-bottom:3px;">
+        <div style="color:#88aaff;font-size:9px;min-width:36px;">CALL</div>
+        <div style="flex:1;height:5px;background:rgba(255,255,255,0.05);border-radius:3px;overflow:hidden;">
+          <div style="width:${callPct}%;height:100%;background:linear-gradient(90deg,#0a2a60,#4488ff);border-radius:3px;"></div>
+        </div>
+        <div style="color:#88aaff;font-size:9px;min-width:24px;text-align:right;">${callPct}%</div>
+      </div>
+      <div style="display:flex;gap:4px;align-items:center;">
+        <div style="color:#ffdd88;font-size:9px;min-width:36px;">RAISE</div>
+        <div style="flex:1;height:5px;background:rgba(255,255,255,0.05);border-radius:3px;overflow:hidden;">
+          <div style="width:${raisePct}%;height:100%;background:linear-gradient(90deg,#5a4000,#ffcc00);border-radius:3px;"></div>
+        </div>
+        <div style="color:#ffdd88;font-size:9px;min-width:24px;text-align:right;">${raisePct}%</div>
+      </div>
+    </div>
+
+    <div style="color:#444;font-size:9px;text-align:center;letter-spacing:0.5px;">
+      ${samples} muestras · ${roundsWithBot} rondas con bot
+    </div>`;
 }
 
 function showExitSummary(humanPlayer, stackFinalArg) {
   const old = document.getElementById('exitSummaryModal');
   if(old) old.remove();
 
-  // Con el nuevo modelo: bank ya fue debitado en cada re-buy.
-  // globalBank ya tiene el stack devuelto.
-  // La ganancia neta = globalBank - (banco original al entrar a la sesión)
-  // Como no guardamos el banco de entrada, lo reconstruimos:
-  //   banco_entrada = globalBank - stackFinal + buyInTotal
+  // NOTA: window._mlBotSessionSnap ya fue capturado en exitRoom() ANTES de resetear players[]
+  // No intentar buscarlo aquí — players[] ya está vacío en este punto.
+
   const stackFinal = stackFinalArg !== undefined ? stackFinalArg : (humanPlayer ? humanPlayer.chips || 0 : 0);
   const buyInTotal = humanPlayer ? (humanPlayer.buyIn || BUY_IN) : BUY_IN;
-  // banco original = globalBank actual − stack devuelto + todo lo que invirtió
   const bancoOriginal = globalBank - stackFinal + buyInTotal;
-  const profit      = globalBank - bancoOriginal; // = stackFinal - buyInTotal
+  const profit      = globalBank - bancoOriginal;
   const nuevoBank   = globalBank;
   const profitLabel = profit > 0 ? `+$${profit}` : profit < 0 ? `-$${Math.abs(profit)}` : '$0';
   const profitColor = profit > 0 ? '#44ff88' : profit < 0 ? '#ff6666' : '#aaaaaa';
@@ -4139,64 +4638,84 @@ function showExitSummary(humanPlayer, stackFinalArg) {
   modal.style.cssText = `
     position:fixed;top:0;left:0;width:100%;height:100%;
     background:rgba(0,0,0,0.92);z-index:600;
-    display:flex;align-items:center;justify-content:center;`;
+    display:flex;align-items:center;justify-content:center;
+    padding:16px;`;
+
   modal.innerHTML = `
-    <div style="
-      background:linear-gradient(160deg,#1c1400,#0e0b00);
-      border:2px solid ${borderColor};
-      border-radius:20px;padding:36px 44px;text-align:center;
-      max-width:460px;width:90%;
-      box-shadow:0 0 60px ${glowColor};
-      font-family:'Rajdhani',sans-serif;">
+    <div style="display:flex;gap:14px;align-items:flex-start;max-width:820px;width:100%;">
 
-      <div style="font-family:'Playfair Display',serif;
-        color:${profit > 0 ? '#ffd060' : profit < 0 ? '#ff8888' : '#aaaaaa'};
-        font-size:26px;margin-bottom:6px;">
-        ${profit > 0 ? '🏆 ¡Sesión ganadora!' : profit < 0 ? '📉 Sesión con pérdidas' : '➖ Sin cambios'}
+      <!-- ── RESUMEN PRINCIPAL ── -->
+      <div style="
+        background:linear-gradient(160deg,#1c1400,#0e0b00);
+        border:2px solid ${borderColor};
+        border-radius:20px;padding:36px 40px;text-align:center;
+        flex:1;min-width:0;
+        box-shadow:0 0 60px ${glowColor};
+        font-family:'Rajdhani',sans-serif;">
+
+        <div style="font-family:'Playfair Display',serif;
+          color:${profit > 0 ? '#ffd060' : profit < 0 ? '#ff8888' : '#aaaaaa'};
+          font-size:26px;margin-bottom:6px;">
+          ${profit > 0 ? '🏆 ¡Sesión ganadora!' : profit < 0 ? '📉 Sesión con pérdidas' : '➖ Sin cambios'}
+        </div>
+        <div style="color:#555;font-size:11px;margin-bottom:22px;letter-spacing:2px;text-transform:uppercase;">Resumen de sesión</div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:20px;">
+          <div style="background:rgba(255,255,255,0.03);border:1px solid #2a2a2a;border-radius:10px;padding:12px 8px;">
+            <div style="color:#555;font-size:9px;margin-bottom:5px;letter-spacing:1px;">BUY-IN</div>
+            <div style="color:#888;font-size:18px;font-weight:700;">$${buyInTotal}</div>
+          </div>
+          <div style="background:rgba(255,255,255,0.03);border:1px solid #2a2a2a;border-radius:10px;padding:12px 8px;">
+            <div style="color:#555;font-size:9px;margin-bottom:5px;letter-spacing:1px;">STACK FINAL</div>
+            <div style="color:#ccc;font-size:18px;font-weight:700;">$${stackFinal}</div>
+          </div>
+          <div style="background:rgba(${profit>0?'20,60,20':profit<0?'60,15,15':'30,30,30'},0.4);
+            border:1px solid ${profitColor}55;border-radius:10px;padding:12px 8px;">
+            <div style="color:#555;font-size:9px;margin-bottom:5px;letter-spacing:1px;">NETO</div>
+            <div style="color:${profitColor};font-size:18px;font-weight:700;">${profitLabel}</div>
+          </div>
+        </div>
+
+        <div style="background:rgba(212,160,23,0.06);border:1px solid #d4a01740;
+          border-radius:12px;padding:16px 20px;margin-bottom:20px;">
+          <div style="color:#666;font-size:9px;margin-bottom:5px;letter-spacing:2px;">BANCO ACTUALIZADO</div>
+          <div style="color:#ffd060;font-size:30px;font-weight:700;font-family:'Playfair Display',serif;">$${nuevoBank}</div>
+          <div style="color:#555;font-size:10px;margin-top:5px;">
+            ${profit === 0
+              ? 'Buy-in recuperado — banco sin cambios'
+              : profit > 0
+                ? `Ganaste $${profit} en ${roundsPlayed} ronda${roundsPlayed !== 1 ? 's' : ''}`
+                : `Perdiste $${Math.abs(profit)} en ${roundsPlayed} ronda${roundsPlayed !== 1 ? 's' : ''}`}
+          </div>
+        </div>
+
+        <button onclick="document.getElementById('exitSummaryModal').remove();"
+          style="padding:12px 36px;
+            background:linear-gradient(135deg,#d4a017,#8a6000);
+            border:none;border-radius:10px;color:#000;font-size:15px;
+            font-weight:700;cursor:pointer;letter-spacing:1px;
+            box-shadow:0 4px 20px rgba(212,160,23,0.4);
+            font-family:'Rajdhani',sans-serif;transition:all 0.15s;"
+          onmouseover="this.style.transform='translateY(-2px)'"
+          onmouseout="this.style.transform='translateY(0)'">
+          Volver al menú
+        </button>
       </div>
-      <div style="color:#555;font-size:11px;margin-bottom:22px;letter-spacing:2px;text-transform:uppercase;">Resumen de sesión</div>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:20px;">
-        <div style="background:rgba(255,255,255,0.03);border:1px solid #2a2a2a;border-radius:10px;padding:12px 8px;">
-          <div style="color:#555;font-size:9px;margin-bottom:5px;letter-spacing:1px;">BUY-IN</div>
-          <div style="color:#888;font-size:18px;font-weight:700;">$${buyInTotal}</div>
-        </div>
-        <div style="background:rgba(255,255,255,0.03);border:1px solid #2a2a2a;border-radius:10px;padding:12px 8px;">
-          <div style="color:#555;font-size:9px;margin-bottom:5px;letter-spacing:1px;">STACK FINAL</div>
-          <div style="color:#ccc;font-size:18px;font-weight:700;">$${stackFinal}</div>
-        </div>
-        <div style="background:rgba(${profit>0?'20,60,20':profit<0?'60,15,15':'30,30,30'},0.4);
-          border:1px solid ${profitColor}55;border-radius:10px;padding:12px 8px;">
-          <div style="color:#555;font-size:9px;margin-bottom:5px;letter-spacing:1px;">NETO</div>
-          <div style="color:${profitColor};font-size:18px;font-weight:700;">${profitLabel}</div>
-        </div>
+      <!-- ── PANEL BOT ML ── -->
+      <div style="
+        background:linear-gradient(160deg,rgba(0,12,38,0.99),rgba(0,22,65,0.99));
+        border:1px solid #2a6aaa;
+        border-radius:18px;padding:20px 18px;
+        width:220px;flex-shrink:0;
+        box-shadow:0 0 28px rgba(74,158,255,0.18),inset 0 1px 0 rgba(100,180,255,0.07);
+        font-family:'Rajdhani',sans-serif;
+        animation:mlGlow 5s ease-in-out infinite;">
+        <div id="mlBotSummaryContent">${buildMLBotSummaryHTML()}</div>
       </div>
 
-      <div style="background:rgba(212,160,23,0.06);border:1px solid #d4a01740;
-        border-radius:12px;padding:16px 20px;margin-bottom:20px;">
-        <div style="color:#666;font-size:9px;margin-bottom:5px;letter-spacing:2px;">BANCO ACTUALIZADO</div>
-        <div style="color:#ffd060;font-size:30px;font-weight:700;font-family:'Playfair Display',serif;">$${nuevoBank}</div>
-        <div style="color:#555;font-size:10px;margin-top:5px;">
-          ${profit === 0
-            ? 'Buy-in recuperado — banco sin cambios'
-            : profit > 0
-              ? `Ganaste $${profit} en ${roundsPlayed} ronda${roundsPlayed !== 1 ? 's' : ''}`
-              : `Perdiste $${Math.abs(profit)} en ${roundsPlayed} ronda${roundsPlayed !== 1 ? 's' : ''}`}
-        </div>
-      </div>
-
-      <button onclick="document.getElementById('exitSummaryModal').remove();"
-        style="padding:12px 36px;
-          background:linear-gradient(135deg,#d4a017,#8a6000);
-          border:none;border-radius:10px;color:#000;font-size:15px;
-          font-weight:700;cursor:pointer;letter-spacing:1px;
-          box-shadow:0 4px 20px rgba(212,160,23,0.4);
-          font-family:'Rajdhani',sans-serif;transition:all 0.15s;"
-        onmouseover="this.style.transform='translateY(-2px)'"
-        onmouseout="this.style.transform='translateY(0)'">
-        Volver al menú
-      </button>
     </div>`;
+
   document.body.appendChild(modal);
 }
 
@@ -4426,6 +4945,80 @@ function _tryStartAudio() {
 document.addEventListener('click', _tryStartAudio, { once: true });
 document.addEventListener('touchstart', _tryStartAudio, { once: true });
 document.addEventListener('keydown', _tryStartAudio, { once: true });
+// ============================================================
+// ACTION BUBBLES — Floating per-player action labels
+// ============================================================
+const _actionBubbles = {};
+
+/**
+ * showPlayerActionBubble(playerIndex, action, detail?)
+ * Shows a floating label above the 3D position of the player.
+ */
+function showPlayerActionBubble(playerIndex, action, detail) {
+  detail = detail || '';
+  const p = players[playerIndex];
+  if (!p) return;
+
+  // Remove any existing bubble for this player
+  if (_actionBubbles[playerIndex]) {
+    _actionBubbles[playerIndex].remove();
+    delete _actionBubbles[playerIndex];
+  }
+
+  const bubble = document.createElement('div');
+  bubble.className = 'action-bubble ab-' + action;
+
+  const labelEl = document.createElement('div');
+  labelEl.className = 'ab-label';
+  labelEl.textContent = (action === 'raise' && detail)
+    ? 'RAISE ' + detail
+    : action.toUpperCase();
+  bubble.appendChild(labelEl);
+
+  if (detail && action !== 'raise') {
+    const detailEl = document.createElement('div');
+    detailEl.className = 'ab-detail';
+    detailEl.textContent = detail;
+    bubble.appendChild(detailEl);
+  }
+
+  _positionBubble(bubble, p);
+  document.body.appendChild(bubble);
+  _actionBubbles[playerIndex] = bubble;
+
+  const SHOW_MS = 1300;
+  const FADE_MS = 250;
+  setTimeout(() => {
+    if (!bubble.isConnected) return;
+    bubble.classList.add('ab-hiding');
+    setTimeout(() => {
+      bubble.remove();
+      delete _actionBubbles[playerIndex];
+    }, FADE_MS);
+  }, SHOW_MS);
+}
+
+function _positionBubble(bubble, player) {
+  if (player.x === undefined || !camera) {
+    bubble.style.left = '50%';
+    bubble.style.top  = '40%';
+    return;
+  }
+  const pos = new THREE.Vector3(player.x, 3.4, player.z);
+  pos.project(camera);
+  const sx = (pos.x *  0.5 + 0.5) * window.innerWidth;
+  const sy = (-pos.y * 0.5 + 0.5) * window.innerHeight;
+  bubble.style.left = sx + 'px';
+  bubble.style.top  = (sy - 40) + 'px';
+}
+
+function updateActionBubbles() {
+  for (const [idx, bubble] of Object.entries(_actionBubbles)) {
+    const p = players[parseInt(idx)];
+    if (p) _positionBubble(bubble, p);
+  }
+}
+
 initThree();
 // Don't init players yet — wait for lobby
 document.getElementById('mlLevelSpan').textContent = mlLevel;
@@ -4445,7 +5038,7 @@ console.log('  ✅ Tone mapping: ACESFilmic → Linear');
 console.log('  ✅ Animate loop throttleado a ~50fps');
 console.log('  ✅ Player labels: cada 3 frames (era cada frame)');
 console.log('  ✅ backdrop-filter blur eliminado de actionPanel y winnerOverlay');
-console.log('  ✅ Bot thinking delay: 900-1500ms → 350-700ms');
+console.log('  ✅ Bot thinking delay: 900-1500ms → 600-1100ms (más legible para el jugador)');
 console.log('  ✅ ML seed: random puro → heurístico de poker real');
 console.log('%c[ML] El bot usará heurística hasta ~20 muestras reales, luego ML real', 'color:#4a9eff');
 

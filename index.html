@@ -316,6 +316,9 @@ body.online-active #exitRoomBtn {
   z-index: 200; display: none; font-weight: 700;
   font-family: 'Rajdhani', sans-serif; letter-spacing: 0.5px;
   transition: all 0.15s;
+  width: auto; max-width: 220px;
+  white-space: nowrap;
+  box-sizing: border-box;
 }
 /* En modo online (cuando onlineBar está visible abajo-izq), el exit va abajo-izq sin desplazamiento */
 #exitRoomBtn.online-mode {
@@ -832,9 +835,15 @@ body.online-active #exitRoomBtn {
     font-size: 12px;
     padding: 9px 14px;
     border-radius: 8px;
+    width: auto;
+    max-width: 180px;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
-  #addBot6Btn { top: 70px; right: 8px; }
-  #exitRoomBtn { top: 116px; right: 8px; }
+  #addBot6Btn { top: 70px; right: 8px; left: auto; }
+  #exitRoomBtn { top: 116px; right: 8px; left: auto; }
   #exitRoomBtn.stats-visible { top: auto; bottom: 8px; left: 8px; right: auto; }
 
   /* ── Audio control: solo mute en mobile, sin slider ── */
@@ -1045,6 +1054,11 @@ body.online-active #exitRoomBtn {
 
 <!-- LOBBY SCREEN -->
 <div id="lobbyOverlay">
+
+  <!-- Mute Button — lobby, fixed bottom-right -->
+  <button id="lobbyMuteBtn" onclick="toggleLobbyMute()" title="Activar/desactivar música"
+    style="position:fixed;bottom:20px;right:20px;width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,rgba(20,12,0,0.97),rgba(40,25,0,0.97));border:1px solid rgba(212,160,23,0.55);box-shadow:0 0 14px rgba(212,160,23,0.2);color:var(--gold);font-size:20px;cursor:pointer;pointer-events:all;z-index:400;display:flex;align-items:center;justify-content:center;transition:transform 0.15s,box-shadow 0.15s;"
+  >🔊</button>
 
   <!-- Bot Info Icon Button — esquina superior derecha, solo en lobby -->
   <button id="botInfoBtn" title="¿Cómo funciona el Bot ML?" onclick="document.getElementById('botInfoModal').classList.add('open')">🤖</button>
@@ -4916,6 +4930,8 @@ function startPianoMelody(ctx) {
 function toggleMute() {
   if (!_audioCtx) return;
   _audioMuted = !_audioMuted;
+  localStorage.setItem('poker_muted', _audioMuted ? 'true' : 'false');
+  window._pendingMute = _audioMuted;
   const btn = document.getElementById('audioMuteBtn');
   if (_audioMuted) {
     _audioMasterGain.gain.linearRampToValueAtTime(0, _audioCtx.currentTime + 0.1);
@@ -4924,6 +4940,7 @@ function toggleMute() {
     _audioMasterGain.gain.linearRampToValueAtTime(_audioVolume, _audioCtx.currentTime + 0.1);
     if (btn) btn.textContent = '🔊';
   }
+  _updateLobbyMuteIcon();
 }
 
 function setVolume(val) {
@@ -5017,6 +5034,66 @@ function updateActionBubbles() {
     const p = players[parseInt(idx)];
     if (p) _positionBubble(bubble, p);
   }
+}
+
+// ============================================================
+// LOBBY MUTE BUTTON — persistencia con localStorage
+// ============================================================
+
+// Leer estado guardado al cargar
+(function _initMutePersistence() {
+  const saved = localStorage.getItem('poker_muted');
+  if (saved === 'true') {
+    // Se aplica tras initAudio() — usamos un flag
+    window._pendingMute = true;
+  }
+  _updateLobbyMuteIcon();
+})();
+
+function _updateLobbyMuteIcon() {
+  const btn = document.getElementById('lobbyMuteBtn');
+  const saved = localStorage.getItem('poker_muted') === 'true';
+  if (btn) btn.textContent = saved ? '🔇' : '🔊';
+  // Sincronizar también el botón en el panel de audio in-game
+  const gameBtn = document.getElementById('audioMuteBtn');
+  if (gameBtn) gameBtn.textContent = saved ? '🔇' : '🔊';
+}
+
+function toggleLobbyMute() {
+  const wasMuted = localStorage.getItem('poker_muted') === 'true';
+  const nowMuted = !wasMuted;
+  localStorage.setItem('poker_muted', nowMuted ? 'true' : 'false');
+  _updateLobbyMuteIcon();
+  // Si el audio ya está iniciado, aplicar inmediatamente
+  if (_audioCtx && _audioMasterGain) {
+    _audioMuted = nowMuted;
+    if (nowMuted) {
+      _audioMasterGain.gain.linearRampToValueAtTime(0, _audioCtx.currentTime + 0.1);
+    } else {
+      _audioMasterGain.gain.linearRampToValueAtTime(_audioVolume, _audioCtx.currentTime + 0.1);
+    }
+  }
+  window._pendingMute = nowMuted;
+}
+
+// Parchear initAudio para que respete el estado guardado al arrancar
+const _origInitAudio = typeof initAudio === 'function' ? initAudio : null;
+if (_origInitAudio) {
+  // Override: aplicar mute pendiente después de initAudio
+  const _patchedInitAudio = function() {
+    _origInitAudio();
+    if (window._pendingMute) {
+      setTimeout(() => {
+        if (_audioCtx && _audioMasterGain) {
+          _audioMuted = true;
+          _audioMasterGain.gain.linearRampToValueAtTime(0, _audioCtx.currentTime + 0.05);
+          _updateLobbyMuteIcon();
+        }
+      }, 200);
+    }
+  };
+  // Reemplazar la referencia global
+  window.initAudio = _patchedInitAudio;
 }
 
 initThree();

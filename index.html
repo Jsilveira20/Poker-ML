@@ -3744,7 +3744,7 @@ function decideActionML(p, handStrength, potOdds, effectiveAgg, humanFoldFreq, h
   let tempBoost = 0; // boost directo a winProb
   let softmaxTemp = 1.0; // temperatura softmax: alta = más aleatorio
   if(mlDataset.biasVarianceState === 'underfitting') {
-    tempBoost = +0.08;    // ser más agresivo cuando underfitting
+    tempBoost = +0.04;    // leve boost cuando underfitting
     softmaxTemp = 1.5;    // explorar más opciones
   } else if(mlDataset.biasVarianceState === 'overfitting') {
     tempBoost = 0;
@@ -3755,7 +3755,7 @@ function decideActionML(p, handStrength, potOdds, effectiveAgg, humanFoldFreq, h
   }
 
   // ── 4. Boost por fase (river debe ser más agresivo) ──────────
-  const phaseBoost = isRiver ? 0.10 : isTurnOrRiver ? 0.05 : 0;
+  const phaseBoost = isRiver ? 0.04 : isTurnOrRiver ? 0.02 : 0;
   const winProb = Math.max(0, Math.min(1, rawProb + tempBoost + phaseBoost));
 
   // ── 5. Calcular scores para cada acción (no umbrales duros) ──
@@ -3765,14 +3765,14 @@ function decideActionML(p, handStrength, potOdds, effectiveAgg, humanFoldFreq, h
   const combined = (winProb * 0.6 + hs * 0.4); // mezcla modelo + heurística
 
   // Score por acción — incluye contexto del pot y fase
-  const potFactor = Math.min(pot / 400, 1.5); // pot grande → más agresión
-  const raiseScore  = combined * (1.0 + potFactor * 0.3) + (isRiver ? 0.15 : 0);
+  const potFactor = Math.min(pot / 600, 1.0); // pot grande → agresión moderada
+  const raiseScore  = Math.min(combined * (1.0 + potFactor * 0.2) + (isRiver ? 0.06 : 0), 0.90);
   const callScore   = (0.35 + combined * 0.5);
   const checkScore  = canCheck ? (0.4 + combined * 0.3) : 0;
   // Fold: tiene sentido si mano débil Y hay apuesta grande
   const foldScore   = canCheck ? 0.0 : (1 - combined) * (0.5 + potOdds * 0.5);
   // Bluff: mano débil + human fold frecuente
-  const bluffScore  = (1 - hs) * humanFoldFreq * (isRiver ? 0.9 : 0.5) * effectiveAgg;
+  const bluffScore  = (1 - hs) * humanFoldFreq * (isRiver ? 0.45 : 0.25) * effectiveAgg;
 
   // ── 6. Softmax sobre scores → probabilidades de decisión ────
   // Softmax con temperatura: temperatura alta = distribución más uniforme
@@ -3965,14 +3965,26 @@ function judgeWinner() {
   if(active.length === 0) return;
   if(active.length === 1) { declareWinner(active[0], null, active); return; }
 
-  let bestRank = -1, winner = null, winnerResult = null;
-  active.forEach(p => {
+  // Evaluar la mejor mano de 5 cartas de cada jugador activo
+  const evaluated = active.map(p => {
     const result = getBestHandRank(p.hand, communityCards);
-    if(result.rank > bestRank || (result.rank === bestRank && tieBreak(result, winnerResult) > 0)) {
-      bestRank = result.rank; winner = p; winnerResult = result;
-    }
+    console.log(`[JUDGE] ${p.name}: rank=${result.rank} (${HAND_NAMES[result.rank]}) kickers=${JSON.stringify(result.kickers)} | hole=${p.hand.map(c=>c.rank+c.suit).join(' ')}`);
+    return { player: p, result };
   });
-  declareWinner(winner, winnerResult, active);
+
+  // Ordenar DESC: el mejor al índice 0
+  evaluated.sort((a, b) => tieBreak(b.result, a.result));
+
+  const winner     = evaluated[0].player;
+  const winResult  = evaluated[0].result;
+  const secondBest = evaluated[1].result;
+
+  console.log(`[JUDGE] Ganador: ${winner.name} con ${HAND_NAMES[winResult.rank]} | kickers=${JSON.stringify(winResult.kickers)}`);
+  if(tieBreak(winResult, secondBest) === 0) {
+    console.warn(`[JUDGE] Empate exacto detectado`);
+  }
+
+  declareWinner(winner, winResult, active);
 }
 
 function showAllHands(active, winner) {
@@ -4207,27 +4219,36 @@ function updateMLBar() {
 // ============================================================
 function getBestHandRank(hand, community) {
   const all = [...hand, ...community];
-  if(all.length < 5) { const r = simpleRank(all); return { rank: r, cards: all, kickers: [] }; }
+  // Si hay menos de 5 cartas (preflop/flop incompleto), evaluar lo que hay
+  if(all.length < 5) { return simpleRankFull(all); }
   const combos = combinations(all, 5);
-  let best = { rank: -1 };
+  let best = { rank: -1, kickers: [] };
   combos.forEach(combo => {
     const res = evaluate5(combo);
-    if(res.rank > best.rank || (res.rank === best.rank && tieBreak(res, best) > 0)) best = res;
+    if(tieBreak(res, best) > 0) best = res;
   });
   return best;
 }
-function simpleRank(cards) {
+
+// simpleRankFull: evalúa manos de menos de 5 cartas devolviendo kickers correctos
+function simpleRankFull(cards) {
+  if(!cards || cards.length === 0) return { rank: 0, kickers: [], cards: [] };
   const vals = cards.map(c=>c.value);
   const counts = {};
   vals.forEach(v => counts[v] = (counts[v]||0)+1);
   const freq = Object.values(counts).sort((a,b)=>b-a);
-  if(freq[0]>=4) return 7;
-  if(freq[0]>=3 && freq[1]>=2) return 6; // full house
-  if(freq[0]>=3) return 3;
-  if(freq[0]>=2 && freq[1]>=2) return 2; // two pair
-  if(freq[0]>=2) return 1;
-  return 0;
+  let rank = 0;
+  if(freq[0]>=4) rank = 7;
+  else if(freq[0]>=3 && (freq[1]||0)>=2) rank = 6;
+  else if(freq[0]>=3) rank = 3;
+  else if(freq[0]>=2 && (freq[1]||0)>=2) rank = 2;
+  else if(freq[0]>=2) rank = 1;
+  // kickers: ordenados por frecuencia DESC, luego valor DESC
+  const grouped = Object.entries(counts).sort((a,b)=>b[1]-a[1]||parseInt(b[0])-parseInt(a[0]));
+  const kickers = grouped.flatMap(([v,c])=>Array(c).fill(parseInt(v)));
+  return { rank, kickers, cards };
 }
+
 function evaluate5(cards) {
   const vals = cards.map(c=>c.value).sort((a,b)=>b-a);
   const suits = cards.map(c=>c.suit);
@@ -4236,8 +4257,7 @@ function evaluate5(cards) {
   const freq = Object.values(counts).sort((a,b)=>b-a);
   const isFlush = suits.every(s=>s===suits[0]);
   const isStraight = checkStraight(vals);
-  // FIX: Royal Flush solo si el straight empieza en 10 (10-J-Q-K-A) con flush.
-  // Un A-2-3-4-5 flush NO es Royal Flush aunque vals[0]===14.
+  // Royal Flush solo si el straight empieza en A-K (A-K-Q-J-10) con flush.
   const isRoyal = isFlush && isStraight && vals[0]===14 && vals[1]===13;
   let rank = 0;
   if(isRoyal) rank = 9;
@@ -4249,29 +4269,50 @@ function evaluate5(cards) {
   else if(freq[0]===3) rank = 3;
   else if(freq[0]===2 && freq[1]===2) rank = 2;
   else if(freq[0]===2) rank = 1;
-  // FIX: ordenar por frecuencia DESC, luego por valor numérico DESC (era string, causaba 9 > 10).
-  const grouped = Object.entries(counts).sort((a,b)=>b[1]-a[1]||parseInt(b[0])-parseInt(a[0]));
-  const kickers = grouped.flatMap(([v,c])=>Array(c).fill(parseInt(v)));
+  // kickers: ordenados por frecuencia DESC, luego valor numérico DESC
+  // Para escalera (straight), los kickers son los valores ordenados DESC (A-low como 5,4,3,2,1)
+  let kickers;
+  if(isStraight) {
+    // Escalera A-2-3-4-5: la carta alta efectiva es el 5
+    if(vals[0]===14 && vals[1]===5) {
+      kickers = [5,4,3,2,1];
+    } else {
+      kickers = [...vals]; // ya están en orden DESC
+    }
+  } else {
+    const grouped = Object.entries(counts).sort((a,b)=>b[1]-a[1]||parseInt(b[0])-parseInt(a[0]));
+    kickers = grouped.flatMap(([v,c])=>Array(c).fill(parseInt(v)));
+  }
   return { rank, kickers, cards };
 }
+
 function checkStraight(sortedVals) {
+  // Escalera normal: cada valor baja exactamente 1
   let ok = true;
   for(let i=0; i<sortedVals.length-1; i++) { if(sortedVals[i]-sortedVals[i+1]!==1) { ok=false; break; } }
   if(ok) return true;
-  const sv = [...sortedVals];
-  if(sv[0]===14) sv.push(1);
-  let ok2 = true;
-  const s = [5,4,3,2,1];
-  for(let i=0; i<5; i++) if(sv.indexOf(s[i])<0) { ok2=false; break; }
-  return ok2;
-}
-function tieBreak(a, b) {
-  if(!a || !b) return 0;
-  if(a.rank !== b.rank) return a.rank - b.rank;
-  for(let i=0; i<Math.min((a.kickers||[]).length,(b.kickers||[]).length); i++) {
-    if(a.kickers[i] !== b.kickers[i]) return a.kickers[i] - b.kickers[i];
+  // Escalera A-low (A-2-3-4-5): As vale 1
+  if(sortedVals[0]===14) {
+    const low = sortedVals.slice(1); // sin el As
+    return low[0]===5 && low[1]===4 && low[2]===3 && low[3]===2;
   }
-  return 0;
+  return false;
+}
+
+function tieBreak(a, b) {
+  if(!a || !b) return (a ? 1 : (b ? -1 : 0));
+  // 1) Comparar rank de mano
+  if(a.rank !== b.rank) return a.rank - b.rank;
+  // 2) Comparar kickers uno a uno (ambos ya están en orden correcto: freq DESC, valor DESC)
+  const ka = a.kickers || [];
+  const kb = b.kickers || [];
+  const len = Math.max(ka.length, kb.length);
+  for(let i=0; i<len; i++) {
+    const va = ka[i] ?? 0;
+    const vb = kb[i] ?? 0;
+    if(va !== vb) return va - vb;
+  }
+  return 0; // empate perfecto
 }
 function combinations(arr, k) {
   if(k===0) return [[]];

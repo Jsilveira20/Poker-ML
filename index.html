@@ -1641,6 +1641,52 @@ function getSocket() {
   return socket;
 }
 
+// ── getSocketReady: espera a que el socket esté conectado antes de emitir ──
+// Resuelve la race condition donde el cliente emitía 'createRoom' o 'joinRoom'
+// antes de que el socket terminara de conectarse (especialmente en Render cold start).
+function getSocketReady() {
+  return new Promise((resolve, reject) => {
+    const sock = getSocket();
+
+    if (sock.connected) {
+      resolve(sock);
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      sock.off('connect', onConnect);
+      sock.off('connect_error', onError);
+      reject(new Error('Timeout conectando al servidor (30s)'));
+    }, 30_000);
+
+    function onConnect() {
+      clearTimeout(timeout);
+      sock.off('connect_error', onError);
+      resolve(sock);
+    }
+
+    function onError(err) {
+      clearTimeout(timeout);
+      sock.off('connect', onConnect);
+      reject(err);
+    }
+
+    sock.once('connect', onConnect);
+    sock.once('connect_error', onError);
+  });
+}
+
+// ── warmUpServer: hace un ping HTTP para despertar el servidor antes de conectar ──
+// En Render (plan gratuito) el servidor duerme tras 15min — esto lo despierta.
+async function warmUpServer() {
+  try {
+    const res = await fetch('/ping', { method: 'GET' });
+    if (res.ok) console.log('[WarmUp] Servidor activo ✅');
+  } catch (e) {
+    console.warn('[WarmUp] Servidor no responde aún, intentando igual...');
+  }
+}
+
 // ── Wrappers de compatibilidad (mantienen la API interna del juego) ──
 // El juego internamente usa fbSet/fbGet/fbListen/fbPatch para sincronizar
 // estado. Los reemplazamos para que en vez de usar P2P usen Socket.IO.
@@ -1917,16 +1963,27 @@ async function createOnlineRoom(name) {
   document.getElementById('waitingMsg').style.display = 'block';
   document.getElementById('waitingMsg').textContent = '⏳ Conectando al servidor...';
 
-  const sock = getSocket();
+  let sock;
+  try {
+    // FIX: esperar a que el socket esté conectado antes de emitir
+    sock = await getSocketReady();
+  } catch (err) {
+    document.getElementById('waitingMsg').textContent = '❌ No se pudo conectar. Verificá tu conexión e intentá de nuevo.';
+    setOnlineStatus('disconnected');
+    console.error('[createOnlineRoom] Error de conexión:', err);
+    return;
+  }
 
-  // Escuchar confirmación de sala creada
+  document.getElementById('waitingMsg').textContent = '⏳ Creando sala...';
+
+  // Escuchar confirmación ANTES de emitir
   sock.once('roomJoined', ({ playerId, players }) => {
     myPlayerId = playerId; // siempre 0 para el host
     const newUrl = window.location.origin + window.location.pathname + '?room=' + roomId;
     window.history.replaceState({}, '', newUrl);
     document.getElementById('roomCodeDisplay').textContent = roomId;
     document.getElementById('roomInfo').style.display = 'block';
-    document.getElementById('waitingMsg').textContent = '⏳ Esperando jugadores...';
+    document.getElementById('waitingMsg').textContent = '✅ Sala creada! Esperando jugadores...';
     document.getElementById('lobbyStartBtn').textContent = 'Iniciar Partida';
     document.getElementById('lobbyStartBtn').onclick = startHostGame;
     const linkEl = document.getElementById('roomLinkDisplay');
@@ -1944,6 +2001,7 @@ async function createOnlineRoom(name) {
     setOnlineStatus('connected', `Sala ${roomId} — ${players.length} jugador(es)`);
   });
 
+  // Ahora sí emitir — el socket está confirmado conectado
   sock.emit('createRoom', { roomId, name });
 }
 
@@ -1963,7 +2021,17 @@ async function joinOnlineRoom(name, code) {
   document.getElementById('waitingMsg').style.display = 'block';
   document.getElementById('waitingMsg').textContent = '⏳ Conectando a sala ' + roomId + '...';
 
-  sock.once('roomJoined', ({ playerId, players: serverPlayers }) => {
+  let readySock;
+  try {
+    // FIX: esperar conexión antes de emitir joinRoom
+    readySock = await getSocketReady();
+  } catch (err) {
+    document.getElementById('waitingMsg').textContent = '❌ No se pudo conectar. Verificá tu conexión e intentá de nuevo.';
+    setOnlineStatus('disconnected');
+    return;
+  }
+
+  readySock.once('roomJoined', ({ playerId, players: serverPlayers }) => {
     myPlayerId = playerId;
     console.log('[CLIENT] roomJoined — soy jugador', myPlayerId, '| gameMode:', gameMode);
     const newUrl = window.location.origin + window.location.pathname + '?room=' + roomId;
@@ -1977,14 +2045,14 @@ async function joinOnlineRoom(name, code) {
   });
 
   // .on en lugar de .once — si el evento llega antes del render no se pierde
-  sock.on('gameStarted', ({ players: serverPlayers, myPlayerId: mid }) => {
-    if (gameMode !== 'client') return; // el host tambien recibe este evento, ignorar
+  readySock.on('gameStarted', ({ players: serverPlayers, myPlayerId: mid }) => {
+    if (gameMode !== 'client') return; // el host también recibe este evento, ignorar
     myPlayerId = mid;
     console.log('[CLIENT] gameStarted — soy jugador', myPlayerId, '| total jugadores:', serverPlayers.length);
     startClientGame({ players: serverPlayers });
   });
 
-  sock.emit('joinRoom', { roomId, name });
+  readySock.emit('joinRoom', { roomId, name });
 }
 
 async function startHostGame() {
@@ -5151,6 +5219,9 @@ if (_origInitAudio) {
   // Reemplazar la referencia global
   window.initAudio = _patchedInitAudio;
 }
+
+// Despertar el servidor al cargar (anti cold-start en Render)
+document.addEventListener('DOMContentLoaded', warmUpServer);
 
 initThree();
 // Don't init players yet — wait for lobby

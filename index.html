@@ -2143,7 +2143,11 @@ function buildGameStateSnapshot(winnerIdx, winnerHandName, winnerPotAmt) {
     lastActionSeqId:  _lastBroadcastAction ? _lastBroadcastAction.seqId     : null,
     players: players.map((p) => ({
       name: p.name, chips: p.chips, bet: p.bet, folded: p.folded,
-      hand: p.hand
+      hand: p.hand,
+      // ✅ FIX BOT SYNC: incluir flags de identidad para que el cliente
+      // reconstruya slots sin asumir isHuman=true por defecto
+      isHuman: !!p.isHuman,
+      isML:    !!p.isML,
     }))
   };
 }
@@ -2181,18 +2185,35 @@ function applyStateUpdate(state) {
     showPlayerActionBubble(state.lastActionPlayer, state.lastActionType, state.lastActionDetail || '');
   }
 
-  // Sincronizar datos de jugadores
+  // ✅ FIX BOT SYNC: Sincronizar datos de jugadores usando isHuman/isML del snapshot
+  // El host es la única fuente de verdad — si un slot no existe localmente
+  // (e.g. Bot ML recién agregado), se crea con los flags correctos del estado.
   (state.players || []).forEach((sp, i) => {
+    const spIsHuman = sp.isHuman !== undefined ? sp.isHuman : true;
+    const spIsML    = sp.isML    !== undefined ? sp.isML    : false;
+
     if (!players[i]) {
-      console.warn(`[CLIENT] Creando slot faltante players[${i}] desde gameState`);
+      console.warn(`[CLIENT] Creando slot faltante players[${i}] (${sp.name}) isHuman:${spIsHuman} isML:${spIsML}`);
       players[i] = {
         name: sp.name || ('Jugador ' + (i + 1)),
-        isHuman: true, isML: false,
+        isHuman: spIsHuman,
+        isML:    spIsML,
         chips: sp.chips, bank: 20000, buyIn: sp.chips || 1000,
         bet: sp.bet, folded: sp.folded, hand: [],
-        mlLevel: -1, x: 0, z: 0
+        mlLevel: spIsML ? 3 : -1, x: 0, z: 0
       };
+      // Si es el Bot ML recién sincronizado, inicializar sus stats de ML
+      if (spIsML) {
+        initBotStats(sp.name);
+        console.log(`[CLIENT] ✅ Bot ML sincronizado desde host: ${sp.name}`);
+      }
+      // Reconstruir la mesa para mostrar el nuevo slot visualmente
+      buildPlayers();
     }
+
+    // ✅ Siempre actualizar flags de identidad desde el host (por si cambiaron)
+    players[i].isHuman = spIsHuman;
+    players[i].isML    = spIsML;
     players[i].chips  = sp.chips;
     players[i].bet    = sp.bet;
     players[i].folded = sp.folded;
@@ -2204,6 +2225,12 @@ function applyStateUpdate(state) {
       players[i].hand = sp.hand || [];
     }
   });
+
+  // ✅ FIX BOT SYNC: Si el host eliminó un slot (e.g. jugador se fue),
+  // truncar el array local para que no queden fantasmas
+  if (state.players && players.length > state.players.length) {
+    players.splice(state.players.length);
+  }
 
   // ── Actualizar community cards SIN parpadeo ──────────────────────────────
   // Solo reconstruir el DOM si cambiaron las cartas (nueva fase o cartas nuevas)
@@ -3082,14 +3109,11 @@ function initPlayersOnline(humanNames, myIdx) {
   players = [];
   humanIndex = myIdx; // index of THIS client's seat
 
-  const botSlots = Math.max(0, 6 - humanNames.length);
-  const botNames = ['Bot Alpha','Bot Beta','Bot Gamma','Bot Delta','Bot Epsilon','Bot Zeta'];
-
-  // BUG FIX: mark ALL human seats as isHuman=true.
-  // Previously only myIdx was marked human, so the other player's slot was
-  // treated as a bot — runActionLoop would auto-act for them instead of waiting.
-  // The distinction "can I click buttons" is handled by (actionIndex === myPlayerId),
-  // not by isHuman on the remote player's slot.
+  // ✅ FIX BOT SYNC: En modo online (host/client) SOLO crear los slots humanos.
+  // Los bots (incluido Bot ML) los agrega únicamente el host via addBot6()
+  // y se sincronizan a todos los clientes a través del gameState broadcast.
+  // NO rellenar con bots automáticos hasta 6 — eso causaba que el cliente
+  // creara un Bot ML fantasma antes de que el host lo agregara.
   humanNames.forEach((name, i) => {
     players.push({
       name,
@@ -3102,15 +3126,9 @@ function initPlayersOnline(humanNames, myIdx) {
       _cardsSynced: false
     });
   });
-
-  for(let i=0; i<botSlots; i++) {
-    players.push({
-      name: botNames[i], isHuman: false, isML: false,
-      chips: 1000, bank: 20000, buyIn: BUY_IN,
-      bet: 0, folded: false, hand: [],
-      mlLevel: Math.floor(Math.random()*3), x: 0, z: 0
-    });
-  }
+  // Nota: los bots normales (non-ML) SÍ los crea el host en startHostGame()
+  // a través de initPlayersOnline con la lista completa. No se agregan aquí
+  // en el cliente porque el primer gameState broadcast los sincronizará.
 }
 
 function resetPlayerHands() {
@@ -3241,7 +3259,10 @@ function startHand() {
   setMsg(`Blinds: ${players[sbIdx].name}=$${sb}, ${players[bbIdx].name}=$${bb}`);
   updateBankUI();
 
-  document.getElementById('addBot6Btn').style.display = roundsPlayed >= 5 && !players.find(p=>p.isML) ? 'block' : 'none';
+  // ✅ FIX BOT SYNC: El botón addBot6 solo es visible para el HOST
+  // Los clientes no-host no pueden agregar el bot — lo reciben via gameState
+  document.getElementById('addBot6Btn').style.display =
+    (gameMode !== 'client') && roundsPlayed >= 5 && !players.find(p=>p.isML) ? 'block' : 'none';
 
   if(gameMode === 'host') broadcastGameState();
 
@@ -4441,6 +4462,13 @@ function ensureExitBtnVisible() {
 // BOT 6 - IA QUE APRENDE
 // ============================================================
 function addBot6() {
+  // ✅ FIX BOT SYNC: Solo el host puede agregar el Bot ML en modo online.
+  // El cliente no-host NUNCA llama addBot6 directamente — recibe el bot
+  // sincronizado via gameState broadcast cuando el host lo agrega.
+  if (gameMode === 'client') {
+    console.warn('[CLIENT] addBot6() bloqueado — solo el host puede agregar el Bot ML');
+    return;
+  }
   if(players.find(p=>p.isML)) return;
 
   // ── Pre-load dataset con conocimiento heurístico de poker ──────────────────
@@ -4554,6 +4582,13 @@ function addBot6() {
   drawMLChart();
   setMsg(`🤖 Bot ML 🧠 se unió — seed heurístico: ${mlDataset.all.length} muestras | Comienza como NOVATO (40% random)`);
   document.getElementById('addBot6Btn').style.display = 'none';
+  // ✅ FIX BOT SYNC: Broadcastear estado inmediatamente para que todos los
+  // clientes no-host reciban al Bot ML en el próximo gameState update.
+  // Sin esto, el bot existe solo en el host hasta el siguiente turno.
+  if (gameMode === 'host') {
+    console.log('[HOST] ✅ Bot ML agregado — broadcasteando estado a clientes');
+    broadcastGameState();
+  }
   // FIX: siempre garantizar que el botón de salir permanezca visible
   const exitBtn = document.getElementById('exitRoomBtn');
   exitBtn.style.display = 'block';

@@ -1919,6 +1919,8 @@ async function createOnlineRoom(name) {
   isHost = true;
   myPlayerId = 0;
   gameMode = 'host';
+  // ✅ FIX: limpiar players[] al crear sala para no arrastrar bots de sesiones previas
+  players = [];
 
   setOnlineStatus('connecting');
   document.getElementById('waitingMsg').style.display = 'block';
@@ -1927,7 +1929,8 @@ async function createOnlineRoom(name) {
   const sock = getSocket();
 
   // Escuchar confirmación de sala creada
-  sock.once('roomJoined', ({ playerId, players }) => {
+  // ✅ FIX: renombrado a serverPlayers para no pisar la variable global players[]
+  sock.once('roomJoined', ({ playerId, players: serverPlayers }) => {
     myPlayerId = playerId; // siempre 0 para el host
     const newUrl = window.location.origin + window.location.pathname + '?room=' + roomId;
     window.history.replaceState({}, '', newUrl);
@@ -1938,17 +1941,18 @@ async function createOnlineRoom(name) {
     document.getElementById('lobbyStartBtn').onclick = startHostGame;
     const linkEl = document.getElementById('roomLinkDisplay');
     if (linkEl) linkEl.textContent = '🔗 ' + buildInviteUrl();
-    updateRoomPlayersList(players);
+    updateRoomPlayersList(serverPlayers);
     setOnlineStatus('connected', `Sala ${roomId} — 1 jugador`);
     console.log('[Crear Sala] ✅ Sala creada:', roomId);
   });
 
   // Escuchar cuando se unen nuevos jugadores
-  sock.on('playersUpdate', ({ players }) => {
-    updateRoomPlayersList(players);
+  // ✅ FIX: renombrado a serverPlayers para no pisar la variable global players[]
+  sock.on('playersUpdate', ({ players: serverPlayers }) => {
+    updateRoomPlayersList(serverPlayers);
     const cnt = document.getElementById('waitingCount');
-    if (cnt) cnt.textContent = players.length;
-    setOnlineStatus('connected', `Sala ${roomId} — ${players.length} jugador(es)`);
+    if (cnt) cnt.textContent = serverPlayers.length;
+    setOnlineStatus('connected', `Sala ${roomId} — ${serverPlayers.length} jugador(es)`);
   });
 
   // ✅ FIX: esperar a que el socket esté conectado antes de emitir
@@ -1971,6 +1975,8 @@ async function joinOnlineRoom(name, code) {
   roomId      = code.toUpperCase();
   isHost      = false;
   gameMode    = 'client';
+  // ✅ FIX: limpiar players[] al unirse para no arrastrar bots de sesiones previas
+  players = [];
   myPlayerName = name;
 
   setOnlineStatus('connecting');
@@ -2088,9 +2094,16 @@ function hostPollPlayers() {} // reemplazado por Socket.IO
 function updateRoomPlayersList(pls) {
   const el = document.getElementById('roomPlayersList');
   if(!el) return;
-  el.innerHTML = (pls||[]).map((p, i) =>
+  // ✅ FIX: filtrar bots ML espurios — la lista del lobby solo muestra humanos reales
+  // El Bot ML se agrega DESPUÉS de iniciar la partida, nunca en el lobby.
+  const humanPlayers = (pls||[]).filter(p => !p.isML && p.name !== 'Bot ML 🧠');
+  const botsCount = 6 - humanPlayers.length;
+  const botsText = botsCount > 0
+    ? `<span style="color:#555;font-size:11px"> + ${botsCount} bot${botsCount>1?'s':''} IA</span>`
+    : '';
+  el.innerHTML = humanPlayers.map((p, i) =>
     `<span style="color:${i===0?'#d4a017':'#aaa'}">${i===0?'👑 ':'👤 '}${p.name||'?'}</span>`
-  ).join(' &nbsp; ');
+  ).join(' &nbsp; ') + botsText;
 }
 
 let lastActionTs = 0;
@@ -4513,6 +4526,14 @@ function addBot6() {
   if (players.find(p => p.isML)) return;
   // Guardia: no agregar el bot mid-hand — podría romperse el estado del juego
   // (el bot no tendría cartas repartidas). Solo permitir entre manos.
+  // Bloquear si la partida no ha comenzado todavía (lobby visible)
+  const lobbyVisible = document.getElementById('lobbyOverlay') &&
+                       document.getElementById('lobbyOverlay').style.display !== 'none';
+  if (lobbyVisible) {
+    console.warn('[HOST] addBot6() bloqueado — partida no iniciada aún (lobby visible)');
+    return;
+  }
+  // Bloquear mid-hand para no agregar un bot sin cartas
   if (gameRunning) {
     setMsg('⚠️ Agregá el Bot ML entre manos, no durante una partida activa.');
     console.warn('[HOST] addBot6() bloqueado — partida en curso (gameRunning=true)');

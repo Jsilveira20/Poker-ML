@@ -1919,8 +1919,9 @@ async function createOnlineRoom(name) {
   isHost = true;
   myPlayerId = 0;
   gameMode = 'host';
-  // ✅ FIX: limpiar players[] al crear sala para no arrastrar bots de sesiones previas
+  // ✅ FIX: limpiar players[] y flags de sesión al crear sala
   players = [];
+  window._mlBotAddedThisSession = false;
 
   setOnlineStatus('connecting');
   document.getElementById('waitingMsg').style.display = 'block';
@@ -1975,8 +1976,9 @@ async function joinOnlineRoom(name, code) {
   roomId      = code.toUpperCase();
   isHost      = false;
   gameMode    = 'client';
-  // ✅ FIX: limpiar players[] al unirse para no arrastrar bots de sesiones previas
+  // ✅ FIX: limpiar players[] y flags de sesión al unirse a sala
   players = [];
+  window._mlBotAddedThisSession = false;
   myPlayerName = name;
 
   setOnlineStatus('connecting');
@@ -2031,19 +2033,19 @@ async function startHostGame() {
     // reciban los clientes no tenga bots de sesiones locales previas del host.
     initPlayersOnline(humanNames, myPlayerId);
 
-    // Verificación defensiva: en este punto NO debe haber ningún slot isML=true.
-    // Si lo hay, es un bug — loguearlo y eliminarlo explícitamente.
-    const strayML = players.findIndex(p => p.isML);
-    if (strayML !== -1) {
-      console.error('[HOST] ⚠️ Bot ML encontrado en players[] ANTES de iniciar partida — eliminando slot espurio:', players[strayML]);
-      players.splice(strayML, 1);
+    // ✅ FIX: Purgar TODO lo que no sea humano real del array players[].
+    // En este punto solo deben existir los humanos que se unieron a la sala.
+    // Los bots normales se agregan en startHand(). El ML Bot solo cuando el host lo pide.
+    players = players.filter(p => p.isHuman);
+    if (players.length !== serverPlayers.length) {
+      console.warn(`[HOST] players[] tenía ${players.length + (serverPlayers.length - players.length)} entradas, purgado a ${players.length} humanos`);
     }
 
     buildPlayers();
     updateBankUI();
     createStartButton();
     broadcastGameState();
-    console.log('[HOST] gameStarted — myPlayerId:', myPlayerId, '| jugadores:', serverPlayers.length, '| bots ML:', players.filter(p=>p.isML).length);
+    console.log('[HOST] gameStarted — myPlayerId:', myPlayerId, '| jugadores humanos:', players.length);
   });
 
   sock.emit('startGame', { roomId });
@@ -2064,13 +2066,11 @@ function startClientGame(roomState) {
 
   initPlayersOnline(allPlayers.map(p => p.name), myPlayerId);
 
-  // ✅ FIX BOT SYNC CLIENT: Igual que el host — garantizar que no quede
-  // ningún slot isML=true de sesiones previas después de initPlayersOnline.
-  const strayML = players.findIndex(p => p.isML);
-  if (strayML !== -1) {
-    console.error('[CLIENT] ⚠️ Bot ML espurio eliminado en startClientGame:', players[strayML]);
-    players.splice(strayML, 1);
-  }
+  // ✅ FIX: Purgar TODO lo que no sea humano real.
+  // Los bots normales llegan via gameState del host en el primer broadcast.
+  // El ML Bot solo aparece cuando el host lo agrega explícitamente.
+  players = players.filter(p => p.isHuman);
+  console.log('[CLIENT] startClientGame — humanos reales:', players.length);
 
   buildPlayers();
   updateBankUI();
@@ -2229,7 +2229,11 @@ function applyStateUpdate(state) {
 
   (state.players || []).forEach((sp, i) => {
     const spIsHuman = sp.isHuman !== undefined ? sp.isHuman : true;
-    const spIsML    = sp.isML    !== undefined ? sp.isML    : false;
+    // ✅ FIX: Solo aceptar isML=true si el ML Bot fue agregado en esta sesión.
+    // Evita que un gameState stale del servidor (de partida anterior) inyecte
+    // un ML Bot que el host no pidió en la sesión actual.
+    const spIsMLRaw = sp.isML !== undefined ? sp.isML : false;
+    const spIsML    = spIsMLRaw && (window._mlBotAddedThisSession === true);
 
     if (!players[i]) {
       // Slot nuevo — crearlo con los flags exactos del host
@@ -2242,9 +2246,11 @@ function applyStateUpdate(state) {
         bet:     sp.bet,     folded: sp.folded, hand: [],
         mlLevel: spIsML ? 3 : -1, x: 0, z: 0
       };
-      if (spIsML) {
+        if (spIsML) {
         // Bot ML recién sincronizado desde el host — inicializar stats locales
         initBotStats(sp.name);
+        // Marcar que el ML Bot fue agregado en esta sesión (no es un fantasma)
+        window._mlBotAddedThisSession = true;
         // Ocultar el botón addBot6 en el cliente (el bot ya existe)
         const addBotBtn = document.getElementById('addBot6Btn');
         if (addBotBtn) addBotBtn.style.display = 'none';
@@ -3279,6 +3285,31 @@ function startHand() {
   // Replace any broke bots between hands
   replaceBrokeBots();
 
+  // ✅ FIX: En modo online el host arranca solo con los jugadores humanos.
+  // Completar la mesa con bots IA normales hasta 6 — NUNCA agregar ML Bot aquí.
+  // Esto solo ocurre en modo host (el cliente recibe el estado via gameState).
+  if (gameMode === 'host' || gameMode === 'local') {
+    const NORMAL_BOT_NAMES = ['Bot Alpha','Bot Beta','Bot Gamma','Bot Delta','Bot Epsilon','Bot Zeta'];
+    const usedNames = new Set(players.map(p => p.name));
+    let botIdx = 0;
+    while (players.length < 6) {
+      // Elegir nombre de bot que no esté en uso
+      while (botIdx < NORMAL_BOT_NAMES.length && usedNames.has(NORMAL_BOT_NAMES[botIdx])) botIdx++;
+      const bname = NORMAL_BOT_NAMES[botIdx] || ('Bot #' + players.length);
+      usedNames.add(bname);
+      botIdx++;
+      players.push({
+        name: bname, isHuman: false, isML: false,
+        chips: BUY_IN, bank: 20000, buyIn: BUY_IN,
+        bet: 0, folded: false, hand: [],
+        mlLevel: Math.floor(Math.random() * 3), x: 0, z: 0
+      });
+      initBotStats(bname);
+    }
+    // Si la mesa se llenó con bots nuevos, reconstruir la representación 3D
+    buildPlayers();
+  }
+
   createDeck(); shuffleDeck();
   resetPlayerHands(); // clears hands + community cards + DOM
   pot = 0; currentBet = 0;
@@ -3313,10 +3344,14 @@ function startHand() {
   setMsg(`Blinds: ${players[sbIdx].name}=$${sb}, ${players[bbIdx].name}=$${bb}`);
   updateBankUI();
 
-  // ✅ FIX BOT SYNC: El botón addBot6 solo es visible para el HOST
-  // Los clientes no-host no pueden agregar el bot — lo reciben via gameState
+  // ✅ FIX: addBot6Btn visible para el HOST siempre que no haya ML Bot.
+  // En modo online: disponible desde ronda 1 (el host elige cuándo agregarlo).
+  // En modo local:  disponible desde ronda 5 (comportamiento original).
+  // En modo client: nunca visible.
+  const _botBtnAvailable = !players.find(p => p.isML);
+  const _botBtnRoundOk = (gameMode === 'host') ? true : (roundsPlayed >= 5);
   document.getElementById('addBot6Btn').style.display =
-    (gameMode !== 'client') && roundsPlayed >= 5 && !players.find(p=>p.isML) ? 'block' : 'none';
+    (gameMode !== 'client') && _botBtnRoundOk && _botBtnAvailable ? 'block' : 'none';
 
   if(gameMode === 'host') broadcastGameState();
 
@@ -4655,6 +4690,7 @@ function addBot6() {
   // clientes no-host reciban al Bot ML en el próximo gameState update.
   // Sin esto, el bot existe solo en el host hasta el siguiente turno.
   if (gameMode === 'host') {
+    window._mlBotAddedThisSession = true;
     console.log('[HOST] ✅ Bot ML agregado — broadcasteando estado a clientes');
     broadcastGameState();
   }

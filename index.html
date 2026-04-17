@@ -2019,12 +2019,25 @@ async function startHostGame() {
     const humanNames = serverPlayers.map(p => p.name);
     document.getElementById('lobbyOverlay').style.display = 'none'; document.getElementById('botInfoBtn').style.display = 'none'; document.getElementById('botInfoModal').classList.remove('open');
     setOnlineStatus('connected', `Sala: ${roomId} | ${serverPlayers.length} jugadores`);
+
+    // ✅ FIX BOT SYNC HOST: initPlayersOnline resetea players[] a SOLO humanos.
+    // Llamarlo SIEMPRE antes de broadcastear para que el primer snapshot que
+    // reciban los clientes no tenga bots de sesiones locales previas del host.
     initPlayersOnline(humanNames, myPlayerId);
+
+    // Verificación defensiva: en este punto NO debe haber ningún slot isML=true.
+    // Si lo hay, es un bug — loguearlo y eliminarlo explícitamente.
+    const strayML = players.findIndex(p => p.isML);
+    if (strayML !== -1) {
+      console.error('[HOST] ⚠️ Bot ML encontrado en players[] ANTES de iniciar partida — eliminando slot espurio:', players[strayML]);
+      players.splice(strayML, 1);
+    }
+
     buildPlayers();
     updateBankUI();
     createStartButton();
     broadcastGameState();
-    console.log('[HOST] gameStarted — myPlayerId:', myPlayerId, '| jugadores:', serverPlayers.length);
+    console.log('[HOST] gameStarted — myPlayerId:', myPlayerId, '| jugadores:', serverPlayers.length, '| bots ML:', players.filter(p=>p.isML).length);
   });
 
   sock.emit('startGame', { roomId });
@@ -2044,19 +2057,30 @@ function startClientGame(roomState) {
     : [];
 
   initPlayersOnline(allPlayers.map(p => p.name), myPlayerId);
+
+  // ✅ FIX BOT SYNC CLIENT: Igual que el host — garantizar que no quede
+  // ningún slot isML=true de sesiones previas después de initPlayersOnline.
+  const strayML = players.findIndex(p => p.isML);
+  if (strayML !== -1) {
+    console.error('[CLIENT] ⚠️ Bot ML espurio eliminado en startClientGame:', players[strayML]);
+    players.splice(strayML, 1);
+  }
+
   buildPlayers();
   updateBankUI();
 
   setPhaseLabel("Texas Hold'em ML");
   setMsg('Esperando que el host inicie la primera mano...');
   document.getElementById('exitRoomBtn').style.display = 'block';
+  // Ocultar botón addBot6 — el cliente nunca lo usa
+  document.getElementById('addBot6Btn').style.display = 'none';
 
   startOnlineClientLoop();
 
   // Pedir ultimo estado por si el host ya broadcasto antes de que terminara la conexion
   if (socket) socket.emit('requestState', { roomId });
 
-  console.log('[CLIENT] startClientGame OK — myPlayerId:', myPlayerId, '| players:', allPlayers.length);
+  console.log('[CLIENT] startClientGame OK — myPlayerId:', myPlayerId, '| players:', allPlayers.length, '| bots ML:', players.filter(p=>p.isML).length);
 }
 
 function hostPollPlayers() {} // reemplazado por Socket.IO
@@ -2185,39 +2209,47 @@ function applyStateUpdate(state) {
     showPlayerActionBubble(state.lastActionPlayer, state.lastActionType, state.lastActionDetail || '');
   }
 
-  // ✅ FIX BOT SYNC: Sincronizar datos de jugadores usando isHuman/isML del snapshot
-  // El host es la única fuente de verdad — si un slot no existe localmente
-  // (e.g. Bot ML recién agregado), se crea con los flags correctos del estado.
+  // ✅ FIX BOT SYNC: Sincronizar datos de jugadores usando isHuman/isML del snapshot.
+  // El host es la única fuente de verdad. Si aparece un slot nuevo con isML=true
+  // es porque el host acaba de agregar el Bot ML — crearlo aquí con estado válido.
+  let _needsRebuild = false;
+
   (state.players || []).forEach((sp, i) => {
     const spIsHuman = sp.isHuman !== undefined ? sp.isHuman : true;
     const spIsML    = sp.isML    !== undefined ? sp.isML    : false;
 
     if (!players[i]) {
-      console.warn(`[CLIENT] Creando slot faltante players[${i}] (${sp.name}) isHuman:${spIsHuman} isML:${spIsML}`);
+      // Slot nuevo — crearlo con los flags exactos del host
+      console.warn(`[CLIENT] Nuevo slot players[${i}] (${sp.name}) isHuman:${spIsHuman} isML:${spIsML}`);
       players[i] = {
-        name: sp.name || ('Jugador ' + (i + 1)),
+        name:    sp.name || ('Jugador ' + (i + 1)),
         isHuman: spIsHuman,
         isML:    spIsML,
-        chips: sp.chips, bank: 20000, buyIn: sp.chips || 1000,
-        bet: sp.bet, folded: sp.folded, hand: [],
+        chips:   sp.chips,   bank: 20000, buyIn: sp.chips || 1000,
+        bet:     sp.bet,     folded: sp.folded, hand: [],
         mlLevel: spIsML ? 3 : -1, x: 0, z: 0
       };
-      // Si es el Bot ML recién sincronizado, inicializar sus stats de ML
       if (spIsML) {
+        // Bot ML recién sincronizado desde el host — inicializar stats locales
         initBotStats(sp.name);
+        // Ocultar el botón addBot6 en el cliente (el bot ya existe)
+        const addBotBtn = document.getElementById('addBot6Btn');
+        if (addBotBtn) addBotBtn.style.display = 'none';
+        // Mostrar panel de ML stats si existe
+        const mlPanel = document.getElementById('mlPerfPanel');
+        if (mlPanel) mlPanel.style.display = 'block';
         console.log(`[CLIENT] ✅ Bot ML sincronizado desde host: ${sp.name}`);
       }
-      // Reconstruir la mesa para mostrar el nuevo slot visualmente
-      buildPlayers();
+      _needsRebuild = true; // reconstruir mesa UNA vez al final
     }
 
-    // ✅ Siempre actualizar flags de identidad desde el host (por si cambiaron)
+    // ✅ Siempre actualizar flags de identidad desde el host (fuente de verdad)
     players[i].isHuman = spIsHuman;
     players[i].isML    = spIsML;
-    players[i].chips  = sp.chips;
-    players[i].bet    = sp.bet;
-    players[i].folded = sp.folded;
-    players[i].name   = sp.name || players[i].name;
+    players[i].chips   = sp.chips;
+    players[i].bet     = sp.bet;
+    players[i].folded  = sp.folded;
+    players[i].name    = sp.name || players[i].name;
 
     if (i === myPlayerId) {
       players[i].hand = sp.hand || [];
@@ -2226,11 +2258,15 @@ function applyStateUpdate(state) {
     }
   });
 
-  // ✅ FIX BOT SYNC: Si el host eliminó un slot (e.g. jugador se fue),
-  // truncar el array local para que no queden fantasmas
+  // ✅ FIX BOT SYNC: Si el host tiene menos slots (jugador se fue), truncar
+  // para que no queden fantasmas locales
   if (state.players && players.length > state.players.length) {
     players.splice(state.players.length);
+    _needsRebuild = true;
   }
+
+  // Reconstruir la mesa solo si cambió la cantidad/composición de jugadores
+  if (_needsRebuild) buildPlayers();
 
   // ── Actualizar community cards SIN parpadeo ──────────────────────────────
   // Solo reconstruir el DOM si cambiaron las cartas (nueva fase o cartas nuevas)
@@ -3129,6 +3165,11 @@ function initPlayersOnline(humanNames, myIdx) {
   // Nota: los bots normales (non-ML) SÍ los crea el host en startHostGame()
   // a través de initPlayersOnline con la lista completa. No se agregan aquí
   // en el cliente porque el primer gameState broadcast los sincronizará.
+
+  // ✅ FIX BOT SYNC: Línea de seguridad final — el Bot ML NUNCA debe existir
+  // al inicializar la sesión online. Solo se crea cuando el host llama addBot6()
+  // explícitamente. Esta línea hace imposible que un bot ML sobreviva aquí.
+  players = players.filter(p => !p.isML);
 }
 
 function resetPlayerHands() {
@@ -4469,7 +4510,14 @@ function addBot6() {
     console.warn('[CLIENT] addBot6() bloqueado — solo el host puede agregar el Bot ML');
     return;
   }
-  if(players.find(p=>p.isML)) return;
+  if (players.find(p => p.isML)) return;
+  // Guardia: no agregar el bot mid-hand — podría romperse el estado del juego
+  // (el bot no tendría cartas repartidas). Solo permitir entre manos.
+  if (gameRunning) {
+    setMsg('⚠️ Agregá el Bot ML entre manos, no durante una partida activa.');
+    console.warn('[HOST] addBot6() bloqueado — partida en curso (gameRunning=true)');
+    return;
+  }
 
   // ── Pre-load dataset con conocimiento heurístico de poker ──────────────────
   //

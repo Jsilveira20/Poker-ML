@@ -1184,7 +1184,7 @@ body.online-active #exitRoomBtn {
       <div class="players-list" id="roomPlayersList"></div>
       <button class="copy-btn" onclick="copyInviteLink()">📋 Copiar link de invitación</button>
     </div>
-    <div id="waitingMsg">⏳ Esperando jugadores... <span id="waitingCount">1</span>/6</div>
+    <div id="waitingMsg">⏳ Esperando jugadores... <span id="waitingCount">1</span> en sala</div>
   </div>
 </div>
 
@@ -2033,18 +2033,15 @@ async function startHostGame() {
     // reciban los clientes no tenga bots de sesiones locales previas del host.
     initPlayersOnline(humanNames, myPlayerId);
 
-    // initPlayersOnline ya garantiza: humanos reales + bots normales (isML=false)
-    // Verificación defensiva final contra cualquier ML Bot espurio
-    if (players.find(p => p.isML)) {
-      console.error('[HOST] ⛔ ML Bot encontrado en players[] al iniciar — eliminado');
-      players = players.filter(p => !p.isML);
-    }
+    // En este punto players[] tiene SOLO los humanos reales de la sala.
+    // Los bots normales se agregan en startHand() al presionar "Nueva Mano".
+    // El ML Bot solo si el host lo pide explícitamente con addBot6().
+    console.log(`[HOST] Sala iniciada — ${players.length} jugadores humanos. Bots: 0. ML Bot: ninguno.`);
 
     buildPlayers();
     updateBankUI();
     createStartButton();
     broadcastGameState();
-    console.log('[HOST] gameStarted — jugadores:', players.length, '| ML Bots:', players.filter(p=>p.isML).length, '(debe ser 0)');
   });
 
   sock.emit('startGame', { roomId });
@@ -2095,16 +2092,16 @@ function hostPollPlayers() {} // reemplazado por Socket.IO
 function updateRoomPlayersList(pls) {
   const el = document.getElementById('roomPlayersList');
   if(!el) return;
-  // ✅ FIX: filtrar bots ML espurios — la lista del lobby solo muestra humanos reales
-  // El Bot ML se agrega DESPUÉS de iniciar la partida, nunca en el lobby.
+  // Solo mostrar jugadores humanos reales — sin mencionar bots.
+  // Los bots se crean al iniciar la primera mano, no antes.
   const humanPlayers = (pls||[]).filter(p => !p.isML && p.name !== 'Bot ML 🧠');
-  const botsCount = 6 - humanPlayers.length;
-  const botsText = botsCount > 0
-    ? `<span style="color:#555;font-size:11px"> + ${botsCount} bot${botsCount>1?'s':''} IA</span>`
+  const slotsLeft = Math.max(0, 5 - humanPlayers.length); // máx 6 en total
+  const slotsText = slotsLeft > 0
+    ? `<span style="color:#555;font-size:11px"> · ${slotsLeft} lugar${slotsLeft>1?'es':''} disponible${slotsLeft>1?'s':''}</span>`
     : '';
   el.innerHTML = humanPlayers.map((p, i) =>
     `<span style="color:${i===0?'#d4a017':'#aaa'}">${i===0?'👑 ':'👤 '}${p.name||'?'}</span>`
-  ).join(' &nbsp; ') + botsText;
+  ).join(' &nbsp; ') + slotsText;
 }
 
 let lastActionTs = 0;
@@ -2223,9 +2220,9 @@ function applyStateUpdate(state) {
     showPlayerActionBubble(state.lastActionPlayer, state.lastActionType, state.lastActionDetail || '');
   }
 
-  // ── Sincronizar players[] con el estado del host (fuente de verdad) ──────
-  // REGLA: isML=true solo aceptado si fue autorizado en esta sesión por addBot6
-  // REGLA: bots normales (isML=false, isHuman=false) aceptados siempre del host
+  // ── Sincronizar players[] con el estado del host (única fuente de verdad) ──
+  // Bots normales (isHuman=false, isML=false): aceptados siempre desde el host.
+  // ML Bot (isML=true): solo aceptado si _mlBotAddedThisSession === true.
   let _needsRebuild = false;
 
   (state.players || []).forEach((sp, i) => {
@@ -3157,10 +3154,12 @@ function initPlayersMulti(humanNames) {
 }
 
 function initPlayersOnline(humanNames, myIdx) {
+  // REGLA: Esta función crea SOLO slots humanos reales.
+  // Los bots normales se crean en startHand() justo antes de repartir.
+  // El ML Bot solo existe cuando el host llama addBot6() explícitamente.
   players = [];
   humanIndex = myIdx;
 
-  // ── Paso 1: crear slots para todos los humanos reales ───────────────────
   humanNames.forEach((name, i) => {
     players.push({
       name,
@@ -3174,28 +3173,7 @@ function initPlayersOnline(humanNames, myIdx) {
     });
   });
 
-  // ── Paso 2: solo el HOST rellena con bots normales hasta 6 ───────────────
-  // REGLA: isML es siempre false aquí. El ML Bot solo existe cuando el host
-  // llama addBot6() explícitamente — nunca como parte de la inicialización.
-  if (gameMode === 'host') {
-    const NORMAL_BOT_NAMES = ['Bot Alpha','Bot Beta','Bot Gamma','Bot Delta','Bot Epsilon','Bot Zeta'];
-    const usedNames = new Set(players.map(p => p.name));
-    let bi = 0;
-    while (players.length < 6) {
-      while (bi < NORMAL_BOT_NAMES.length && usedNames.has(NORMAL_BOT_NAMES[bi])) bi++;
-      const bname = NORMAL_BOT_NAMES[bi] || ('Bot #' + players.length);
-      usedNames.add(bname); bi++;
-      players.push({
-        name: bname, isHuman: false, isML: false,
-        chips: BUY_IN, bank: 20000, buyIn: BUY_IN,
-        bet: 0, folded: false, hand: [],
-        mlLevel: Math.floor(Math.random() * 3), x: 0, z: 0
-      });
-      initBotStats(bname);
-    }
-  }
-
-  // ── Línea de seguridad absoluta: isML nunca puede existir aquí ──────────
+  // Seguridad absoluta: isML nunca puede existir al inicializar la sala
   players = players.filter(p => !p.isML);
 }
 
@@ -3291,8 +3269,35 @@ function startHand() {
     }
   });
 
-  // Replace any broke bots between hands
+  // Replace any broke bots between hands (solo modo local)
   replaceBrokeBots();
+
+  // ── Fill-on-deal: el host completa la mesa con bots normales antes de repartir ──
+  // REGLA: Solo ocurre en modo host. El cliente recibe la mesa completa por gameState.
+  // Los bots normales se crean aquí y persisten entre manos (solo se reemplazan
+  // si quedan sin fichas). Nunca se crea un ML Bot aquí.
+  if (gameMode === 'host') {
+    const NORMAL_BOT_NAMES = ['Bot Alpha','Bot Beta','Bot Gamma','Bot Delta','Bot Epsilon','Bot Zeta'];
+    const usedNames = new Set(players.map(p => p.name));
+    let bi = 0;
+    const humanCount  = players.filter(p => p.isHuman).length;
+    const mlBotCount  = players.filter(p => p.isML).length;
+    // Máximo de bots normales = 6 - humanos - ML Bot (si existe)
+    const targetTotal = 6 + mlBotCount; // 6 slots base + el ML Bot si ya está
+    while (players.filter(p => !p.isML).length < 6) {
+      while (bi < NORMAL_BOT_NAMES.length && usedNames.has(NORMAL_BOT_NAMES[bi])) bi++;
+      const bname = NORMAL_BOT_NAMES[bi] || ('Bot #' + (players.length));
+      usedNames.add(bname); bi++;
+      players.push({
+        name: bname, isHuman: false, isML: false,
+        chips: BUY_IN, bank: 20000, buyIn: BUY_IN,
+        bet: 0, folded: false, hand: [],
+        mlLevel: Math.floor(Math.random() * 3), x: 0, z: 0
+      });
+      initBotStats(bname);
+    }
+    buildPlayers();
+  }
 
   // ✅ Verificación de integridad: nunca debe haber más de 1 ML Bot
   const mlBotCount = players.filter(p => p.isML).length;

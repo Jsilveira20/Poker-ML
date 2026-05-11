@@ -3354,7 +3354,7 @@ function startHand() {
   // En modo local:  disponible desde ronda 5 (comportamiento original).
   // En modo client: nunca visible.
   const _botBtnAvailable = !players.find(p => p.isML);
-  const _botBtnRoundOk = (gameMode === 'host') ? true : (roundsPlayed >= 5);
+  const _botBtnRoundOk = (gameMode === 'host') ? true : (roundsPlayed >= 6);
   document.getElementById('addBot6Btn').style.display =
     (gameMode !== 'client') && _botBtnRoundOk && _botBtnAvailable ? 'block' : 'none';
 
@@ -4571,10 +4571,11 @@ function addBot6() {
     console.warn('[HOST] addBot6 bloqueado — lobby aún visible');
     return;
   }
+  // FIX: permitir agregar el bot incluso si hay mano en curso
+  // El bot entrará en la próxima mano automáticamente
   if (gameRunning) {
-    setMsg('⚠️ Podés agregar el Bot ML entre manos.');
-    console.warn('[HOST] addBot6 bloqueado — mano en curso');
-    return;
+    setMsg('⚠️ Bot ML se unirá en la próxima mano.');
+    console.warn('[HOST] addBot6: mano en curso — el bot entra igual');
   }
 
   // ── Pre-load dataset con conocimiento heurístico de poker ──────────────────
@@ -4688,6 +4689,9 @@ function addBot6() {
     mlLevel: 3, x: 0, z: 0
   });
   initBotStats('Bot ML 🧠');
+  // ✅ FIX OFFLINE: Setear el flag SIEMPRE (local + host) para que startHand()
+  // no elimine el Bot ML por "sin autorización" en modo local.
+  window._mlBotAddedThisSession = true;
   buildPlayers();
   updateMLBar();
   document.getElementById('mlLevelSpan').textContent = 'Activo';
@@ -4695,11 +4699,8 @@ function addBot6() {
   drawMLChart();
   setMsg(`🤖 Bot ML 🧠 se unió — seed heurístico: ${mlDataset.all.length} muestras | Comienza como NOVATO (40% random)`);
   document.getElementById('addBot6Btn').style.display = 'none';
-  // ✅ FIX BOT SYNC: Broadcastear estado inmediatamente para que todos los
-  // clientes no-host reciban al Bot ML en el próximo gameState update.
-  // Sin esto, el bot existe solo en el host hasta el siguiente turno.
+  // Broadcastear estado a clientes si estamos en modo host
   if (gameMode === 'host') {
-    window._mlBotAddedThisSession = true;
     console.log('[HOST] ✅ Bot ML agregado — broadcasteando estado a clientes');
     broadcastGameState();
   }
